@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>蓮蓬頭 – 語音辨識</title>
+  <style>
+    body {
+      font-family: monospace;
+      background: #0a0a0a;
+      color: #ccc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }
+    #status  { font-size: 1.2rem; color: #888; }
+    #dot     { font-size: 2rem; margin: 20px; transition: color 0.3s; }
+    #transcript { font-size: 1rem; color: #555; max-width: 400px; text-align: center; }
+    .listening #dot { color: #4af; }
+    .error     #dot { color: #f44; }
+  </style>
+</head>
+<body>
+  <div id="status">等待連線...</div>
+  <div id="dot">●</div>
+  <div id="transcript"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+  <script>
+    const statusEl     = document.getElementById('status');
+    const transcriptEl = document.getElementById('transcript');
+    const socket       = io();
+
+    // ── 瀏覽器支援檢查 ─────────────────────────────
+    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+      statusEl.textContent = '請用 Chrome 瀏覽器開啟此頁面';
+      document.body.classList.add('error');
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition       = new SpeechRecognition();
+    recognition.lang           = 'zh-TW';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    // ── 語音辨識事件 ───────────────────────────────
+    recognition.onstart = () => {
+      document.body.classList.add('listening');
+      statusEl.textContent = '聆聽中...';
+    };
+
+    recognition.onresult = (event) => {
+      const text = event.results[0][0].transcript;
+      transcriptEl.textContent = text;
+      socket.emit('transcript', { text });
+    };
+
+    recognition.onend = () => {
+      document.body.classList.remove('listening');
+      statusEl.textContent = '等待觸發...';
+    };
+
+    recognition.onerror = (event) => {
+      document.body.classList.add('error');
+      statusEl.textContent = '錯誤：' + event.error;
+      setTimeout(() => document.body.classList.remove('error'), 2000);
+    };
+
+    // ── SocketIO 事件 ──────────────────────────────
+    socket.on('connect', () => {
+      statusEl.textContent = '已連線，等待觸發...';
+    });
+
+    socket.on('disconnect', () => {
+      statusEl.textContent = '連線中斷，請重新整理';
+    });
+
+    socket.on('start_listening', () => {
+      transcriptEl.textContent = '';
+      try { recognition.start(); } catch (e) { /* 已在聆聽中 */ }
+    });
+  </script>
+</body>
+</html>

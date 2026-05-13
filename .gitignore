@@ -1,0 +1,21 @@
+# 環境變數（含 API 金鑰，絕對不要 commit）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# 暫存音頻檔
+*.mp3
+*.wav
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
