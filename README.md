@@ -6,6 +6,27 @@
 
 ---
 
+## 目前進度
+
+| 項目 | 狀態 |
+|------|------|
+| GitHub repo 建立 | ✅ |
+| Python 主程式（main.py） | ✅ |
+| Arduino 程式（showerhead.ino） | ✅ |
+| Chrome Web Speech 介面 | ✅ |
+| Gemini API key | ✅ |
+| ElevenLabs API key + 聲音 | ⏳ 進行中 |
+| Python 套件安裝 | ⏳ 進行中 |
+| Voicemeeter Banana | ✅ 已安裝 |
+| VB-Cable | ✅ 已下載 |
+| 硬體元件 | ❌ 待購買 |
+| Arduino 燒錄測試 | ❌ 待硬體到貨 |
+| 全系統整合測試 | ❌ 待完成 |
+
+*最後更新：2026-05-13*
+
+---
+
 ## 概念核心
 
 蓮蓬頭不是「用來噴水的工具」，它首先是一個存在者。  

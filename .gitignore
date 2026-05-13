@@ -19,3 +19,16 @@ build/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 安裝檔（不屬於專案程式碼）
+*.exe
+*.sys
+*.cat
+*.inf
+*.zip
+voicemeeterprosetup*
+vbaudio_*
+vbMmeCable*
+readme.txt
+pin_in.ico
+pin_out.ico
