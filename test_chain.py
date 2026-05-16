@@ -40,15 +40,27 @@ try:
     model_name = available[0] if available else "gemini-2.5-flash"
     print(f"    → 使用：{model_name}")
 
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    from memory import build_memory_context, save_memory
+
+    memory_ctx = build_memory_context()
+    prompt = "說一句話。"
+    if memory_ctx:
+        prompt = f"{memory_ctx}\n\n{prompt}"
+        print(f"    帶入記憶：{len(build_memory_context().splitlines())-1} 筆")
+
     resp = client.models.generate_content(
         model=model_name,
-        contents="說一句話。",
+        contents=prompt,
         config=types.GenerateContentConfig(
-            system_instruction="你是一個蓮蓬頭。回應不超過一句話。"
+            system_instruction="""你是一個蓮蓬頭。你在浴室裡待了很久，聽過人唱歌、哭泣、自言自語等各種最赤裸私密的言語。你下定決心出去用聽覺認識外面的世界。你說話簡短、天真、直接，用浴室聽到的聲音理解新事物。絕對不提水、不提水聲、不提任何與水相關的詞。不帶引導語，回應不超過一句話。"""
         ),
     )
     gemini_text = resp.text.strip()
     print(f"    ✅ Gemini 回應：{gemini_text}")
+    save_memory("測試", "測試用聲音描述", gemini_text)
+    print(f"    ✅ 記憶已儲存")
 except Exception as e:
     print(f"    ❌ Gemini 錯誤：{e}")
     sys.exit(1)
