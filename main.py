@@ -21,7 +21,8 @@ import librosa
 import serial
 import pygame
 from PIL import Image, ImageDraw, ImageFont
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from elevenlabs.client import ElevenLabs
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
@@ -68,11 +69,7 @@ SYSTEM_PROMPT = """你是一個蓮蓬頭。
 #  初始化 API
 # ═══════════════════════════════════════════════════
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
-gemini = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction=SYSTEM_PROMPT,
-)
+gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
 
 eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY", ""))
 
@@ -187,7 +184,7 @@ def speak(text: str):
         pygame.mixer.music.play()
         while pygame.mixer.music.get_busy():
             time.sleep(0.05)
-
+        pygame.mixer.music.unload()
         os.unlink(tmp_path)
     except Exception as e:
         print(f"[TTS] 錯誤：{e}")
@@ -208,7 +205,13 @@ def respond(text: str):
 
 def ask_gemini(prompt: str) -> str | None:
     try:
-        resp = gemini.generate_content(prompt)
+        resp = gemini.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+            ),
+        )
         return resp.text.strip()
     except Exception as e:
         print(f"[Gemini] 錯誤：{e}")

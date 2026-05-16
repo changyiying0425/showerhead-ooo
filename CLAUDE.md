@@ -136,9 +136,9 @@
 ## API 金鑰狀態
 | 服務 | 狀態 |
 |------|------|
-| Gemini API（Google AI Studio） | ✅ 已設定於 .env |
-| ElevenLabs API key | ⏳ 待填入 |
-| ElevenLabs Voice ID | ⏳ 待選擇並填入 |
+| Gemini API（Google AI Studio） | ✅ 已設定，使用 `gemini-2.5-flash`，SDK 已升級至 `google-genai` |
+| ElevenLabs API key | ✅ 已設定於 .env |
+| ElevenLabs Voice ID | ✅ Adam（premade，免費可用 API） |
 
 ---
 
@@ -146,10 +146,10 @@
 | 軟體 | 狀態 |
 |------|------|
 | Python 3.13.7 | ✅ 已安裝（已加入 PATH） |
-| Python 套件（requirements.txt） | ⏳ 安裝中 |
+| Python 套件（requirements.txt） | ✅ 全部安裝完成 |
 | Arduino IDE | ❌ 待安裝 |
-| Voicemeeter Banana | ✅ 已安裝 |
-| VB-Cable | ✅ 已下載（待安裝） |
+| Voicemeeter Banana | ✅ 已安裝，A1 輸出設定為 CABLE Input |
+| VB-Cable | ✅ 已安裝（重新安裝 v2.1.5.8） |
 | Chrome 瀏覽器 | ✅ |
 
 ---
@@ -226,13 +226,21 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 ---
 
 ## 待辦事項
-- [ ] ElevenLabs：取得 API key + 選定 Voice ID 並填入 .env
-- [ ] Python 套件確認全部安裝完成
-- [ ] VB-Cable 安裝（以系統管理員身份執行）
+- [x] ElevenLabs：取得 API key + 選定 Voice ID 並填入 .env
+- [x] Python 套件確認全部安裝完成
+- [x] VB-Cable 安裝（以系統管理員身份執行）
+- [x] Gemini → ElevenLabs → pygame 串聯測試通過
+- [ ] 調整蓮蓬頭 SYSTEM_PROMPT 個性設定
 - [ ] Arduino IDE 安裝 + U8g2 library
 - [ ] 購買缺少的硬體元件
 - [ ] 硬體到貨後：燒錄 Arduino、測試 OLED + FSR
 - [ ] Voicemeeter 音效參數設定
 - [ ] 全系統整合測試
 
-*最後更新：2026-05-13*
+## 技術備註
+- Gemini SDK 已從 `google-generativeai`（已停止維護）升級至 `google-genai`
+- 使用模型：`gemini-2.5-flash`（自動從帳號可用模型清單選取最新版）
+- ElevenLabs 免費方案只能使用 `premade` 聲音（不能用聲音庫社群聲音）
+- pygame 播放完畢後需呼叫 `pygame.mixer.music.unload()` 再刪除暫存檔，避免 Windows 檔案鎖定
+
+*最後更新：2026-05-16*
