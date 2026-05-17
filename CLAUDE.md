@@ -148,7 +148,7 @@
 | Python 3.13.7 | ✅ 已安裝（已加入 PATH） |
 | Python 套件（requirements.txt） | ✅ 全部安裝完成 |
 | Arduino IDE | ❌ 待安裝 |
-| Voicemeeter Banana | ✅ 已安裝，A1 輸出設定為 CABLE Input |
+| Voicemeeter Banana | ✅ 已安裝，EQ + A1 輸出設定完成（見下方音效設定章節） |
 | VB-Cable | ✅ 已安裝（重新安裝 v2.1.5.8） |
 | Chrome 瀏覽器 | ✅ |
 
@@ -161,7 +161,7 @@
 | 1.3吋 OLED SPI 128×64（SH1106） | 顯示文字 | ✅ 已有 |
 | FSR 壓力感測器 | 偵測握力 | ✅ 已有 |
 | 10kΩ 電阻 | FSR 分壓電路 | ✅ 已有 |
-| USB 麥克風 | 收音 | ✅ 已有 |
+| USB 麥克風 | 收音 | ⚠️ 3.5mm TRRS 麥克風無法正常收音，暫用筆電內建 Microphone Array |
 | USB 有源喇叭 | 播出聲音 | ⚠️ 暫用電腦喇叭替代 |
 | USB 集線器 | 同時接多個 USB | ✅ 已有 |
 | 塑膠蓮蓬頭 | 主體外觀 | ✅ 已有 |
@@ -219,10 +219,58 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 ---
 
 ## 聲音設計
-- ElevenLabs 選低沉、偏沙啞的聲音作為基底
-- Voicemeeter Banana 套用音效：壓低高頻、提升低頻、加混響
+- ElevenLabs 選低沉、偏沙啞的聲音作為基底（Voice ID：Adam premade）
+- Voicemeeter Banana 套用音效：壓低高頻、提升低頻
 - 效果：悶悶的、混雜的，像聲音被困在金屬腔體裡出不來
 - **文字（OLED）是給觀眾讀懂的版本，聲音才是它真實的樣子**
+
+---
+
+## Voicemeeter Banana 音效設定
+
+### 音訊路由
+- ElevenLabs 播放裝置 → **Voicemeeter Input（VAIO）**
+- Voicemeeter A1 輸出 → **Speakers (Realtek® Audio)**（目前暫用電腦喇叭）
+
+### VAIO 輸入條 EQ（簡易 2 段）
+| 旋鈕 | 設定值 |
+|------|--------|
+| Treble | −5.0 |
+| Bass | +2.3 |
+
+### Bus A1 EQPro-G6（6 段參數 EQ）
+| 頻段 | Hz | dB |
+|------|----|----|
+| Band 1 | 100 | −3.2 |
+| Band 2 | 400 | +4.6 |
+| Band 3 | 1510 | −2.0 |
+| Band 4 | 4000 | −6.8 |
+| Band 5 | 8000 | −10.3 |
+| Band 6 | 12000（High Shelf） | −8.9 |
+
+> Band 6 使用 High Shelf 濾波器，確保 12kHz 以上繼續往下壓，不反彈。
+> 設定已儲存為 `voicemeeter_showerhead.xml`。
+
+---
+
+## 麥克風設定
+
+### 目前狀態
+- **使用裝置**：筆電內建 Microphone Array (Realtek)
+- **原因**：3.5mm TRRS 外接麥克風（JGL-119H）無法正常收音，硬體不相容
+- **展覽建議**：改用 USB 麥克風，避免接孔相容問題
+
+### 麥克風校準數值（2026-05-18 測定）
+| 情況 | rms |
+|------|-----|
+| 安靜（背景噪音） | 0.015 |
+| 說話 | 0.029 |
+| 唱歌 | 0.063 |
+
+### 靜音門檻設定
+- `main.py` 靜音門檻：`rms < 0.022`
+- 低於此值視為安靜，不觸發 Gemini 回應
+- melody 偵測條件：`harmonic_ratio > 0.65 and zcr < 0.07`
 
 ---
 
@@ -255,8 +303,11 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [ ] Arduino IDE 安裝 + U8g2 library
 - [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
 - [ ] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測
-- [ ] Voicemeeter 音效參數設定
-- [ ] 全系統整合測試
+- [x] Voicemeeter 音效參數設定（EQ 完成，設定已儲存）
+- [x] 麥克風校準（靜音門檻 0.022，melody 偵測條件調校）
+- [x] 環境音模式完整測試通過（唱歌、說話、環境音皆可正確匹配）
+- [ ] 展覽用 USB 麥克風（3.5mm TRRS 不相容，需更換）
+- [ ] 全系統整合測試（含 Arduino）
 
 ## 技術備註
 - Gemini SDK 已從 `google-generativeai`（已停止維護）升級至 `google-genai`
@@ -266,5 +317,10 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - M4A 等非標準格式透過 ffmpeg 轉成臨時 WAV 再用 librosa 分析，FFMPEG_DIR 設定於 .env
 - memories.json v1.2：21 筆聲音記憶，含公園、捷運、雨聲、唱歌（中/英文）等
 - 唱歌品質分數：hr×0.6 + zcr_stability×0.3 + rms×0.1，比較差距 > 0.08 才輸出比較語
+- melody 偵測條件：`harmonic_ratio > 0.65 and zcr < 0.07`（說話不觸發，需真正唱歌）
+- 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
+- 靜音門檻：`rms < 0.022`（依 2026-05-18 麥克風校準結果設定）
+- 3.5mm TRRS 麥克風（JGL-119H）與筆電不相容，暫用內建 Microphone Array
+- `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
 
-*最後更新：2026-05-17（硬體備齊，進入燒錄與整合階段）*
+*最後更新：2026-05-18（Voicemeeter 音效設定完成、麥克風校準、環境音模式測試通過）*

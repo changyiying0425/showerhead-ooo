@@ -261,7 +261,7 @@ def describe_audio(audio: np.ndarray) -> tuple[str | None, dict]:
     rms = float(np.sqrt(np.mean(audio ** 2)))
     features: dict = {"rms": rms}
 
-    if rms < 0.008:
+    if rms < 0.022:
         return None, features
 
     af = audio.astype(np.float32)
@@ -275,7 +275,10 @@ def describe_audio(audio: np.ndarray) -> tuple[str | None, dict]:
         freq_mid       = float(np.sum(stft[(freqs >= 300) & (freqs < 2000)]) / total)
         harmonic       = librosa.effects.harmonic(af)
         harmonic_ratio = float(np.mean(harmonic ** 2)) / (float(np.mean(af ** 2)) + 1e-10)
-        has_melody     = harmonic_ratio > 0.55 or (harmonic_ratio > 0.35 and rms > 0.015)
+        # 唱歌：harmonic_ratio 高 + ZCR 低（音符持續、穩定）
+        # 說話：harmonic_ratio 中 + ZCR 較高（音高變化快）
+        has_melody = (harmonic_ratio > 0.65 and zcr < 0.07) or \
+                     (harmonic_ratio > 0.55 and zcr < 0.05 and rms > 0.025)
     except Exception:
         centroid, zcr, freq_high, freq_mid, harmonic_ratio, has_melody = (
             2000.0, 0.08, 0.5, 0.3, 0.0, False
@@ -328,10 +331,15 @@ def ambient_loop():
             continue
 
         desc, features = describe_audio(audio.flatten())
+        rms_val = features.get("rms", 0)
+        zcr_val = features.get("zcr", 0)
+        hr_val  = features.get("harmonic_ratio", 0)
+        print(f"[偵測] rms={rms_val:.4f}  zcr={zcr_val:.3f}  hr={hr_val:.3f}  {'有聲音' if desc else '安靜（rms<0.022）'}  melody={features.get('has_melody', False)}")
 
         if desc:
             last_sound_time = time.time()
-            if desc != prev_desc:
+            is_singing = features.get("has_melody", False)
+            if desc != prev_desc or is_singing:
                 matched = match_sound(
                     rms            = features.get("rms", 0),
                     centroid       = features.get("centroid", 2000),

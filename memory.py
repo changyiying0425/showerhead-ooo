@@ -80,6 +80,12 @@ def match_sound(rms: float, centroid: float, zcr: float,
             penalty += 0.4
         if has_melody and not hint.get("has_melody"):
             penalty += 0.2
+        # 偵測到旋律時，優先匹配唱歌記憶
+        if has_melody and "唱歌" in mem.get("id", ""):
+            penalty -= 0.4
+        # 偵測到旋律但匹配到非人聲樂器，加懲罰
+        if has_melody and hint.get("has_melody") and "唱歌" not in mem.get("id", ""):
+            penalty += 0.3
 
         score = rms_diff * 0.55 + centroid_diff * 0.30 + penalty
         if score < best_score:
@@ -134,7 +140,7 @@ def get_last_singing_quality() -> float | None:
     """回傳最近一次唱歌的品質分數，沒有則回傳 None。"""
     log = load_session_log()
     for entry in reversed(log):
-        if entry.get("matched_memory_id", "").startswith("唱歌") and \
+        if (entry.get("matched_memory_id") or "").startswith("唱歌") and \
            entry.get("singing_quality") is not None:
             return entry["singing_quality"]
     return None
