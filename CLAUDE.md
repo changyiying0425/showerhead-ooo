@@ -238,7 +238,12 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [x] Gemini → ElevenLabs → pygame 串聯測試通過
 - [x] 調整蓮蓬頭 SYSTEM_PROMPT 個性設定（移除水相關詞彙，純聽覺視角）
 - [x] 記憶系統建立（memory.py + memories.json，保留全部、帶入最近 5 筆）
-- [ ] 記憶音訊檔批次匯入（部分完成：公園、台鐵月台；城市街道後待解決 mp3 解碼問題）
+- [x] 全部音訊檔分析完成（21 筆，含 M4A 支援，使用 ffmpeg 轉檔）
+- [x] 唱歌品質比較系統（harmonic ratio 評分，前後場次比較，差距 > 0.08 才觸發）
+- [x] scan_sounds.py：自動掃描新音檔，互動式加入 memories.json
+- [x] memories.json 完整建立（21 筆聲音記憶，每筆含 sample_responses 6–11 句）
+- [x] test_response.py：自動化場景測試（8 情境，不需互動，使用真實音頻參數）
+- [x] 回應調校：雨聲、狗叫聲、「你是誰」對話引導語更新
 - [ ] 瀏覽器 Web Speech API 介面設定與測試
 - [ ] Arduino IDE 安裝 + U8g2 library
 - [ ] 購買缺少的硬體元件
@@ -251,6 +256,8 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - 使用模型：`gemini-2.5-flash`（自動從帳號可用模型清單選取最新版）
 - ElevenLabs 免費方案只能使用 `premade` 聲音（不能用聲音庫社群聲音）
 - pygame 播放完畢後需呼叫 `pygame.mixer.music.unload()` 再刪除暫存檔，避免 Windows 檔案鎖定
-- 部分 mp3 檔案 librosa 無法直接解碼，需安裝 ffmpeg 或先轉換成 wav
+- M4A 等非標準格式透過 ffmpeg 轉成臨時 WAV 再用 librosa 分析，FFMPEG_DIR 設定於 .env
+- memories.json v1.2：21 筆聲音記憶，含公園、捷運、雨聲、唱歌（中/英文）等
+- 唱歌品質分數：hr×0.6 + zcr_stability×0.3 + rms×0.1，比較差距 > 0.08 才輸出比較語
 
 *最後更新：2026-05-17*

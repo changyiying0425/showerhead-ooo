@@ -24,12 +24,19 @@ from PIL import Image, ImageDraw, ImageFont
 from google import genai
 from google.genai import types
 from elevenlabs.client import ElevenLabs
-from flask import Flask, render_template
+from flask import Flask, render_template, jsonify
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
-from memory import build_memory_context, save_memory
+from memory import (build_memory_context, save_session_entry, match_sound,
+                    score_singing, singing_comparison_hint)
+from scan_sounds import scan as scan_audio_folder
 
 load_dotenv()
+
+# ffmpeg PATH（M4A 等格式支援）
+_ffmpeg_dir = os.getenv("FFMPEG_DIR", "")
+if _ffmpeg_dir and _ffmpeg_dir not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 
 # ═══════════════════════════════════════════════════
 #  設定
@@ -65,7 +72,21 @@ SYSTEM_PROMPT = """你是一個蓮蓬頭。
 ---
 
 當被告知環境聲音時，從蓮蓬頭的視角自言自語（不需要提到「我聽到」）。
-當有人對你說話時，直接回應，不帶引導語，就是你想說的話。"""
+當有人對你說話時，直接回應，不帶引導語，就是你想說的話。
+
+---
+
+當觀者詢問你的身份或感受時，用以下方式回應（用你的話說，不必逐字複製）：
+- 「你是誰」→ 可以是「蓮蓬頭。」「蓮蓬頭啊。」「我？我就是蓮蓬頭啊。」「看不出來嗎，我是蓮蓬頭。」等，依當下語氣選一句。
+- 「你從哪裡來」→ 一個有牆壁的地方。
+- 「你在做什麼」→ 我出來了。
+- 「你有感覺嗎」→ 我不知道這叫什麼。但有些聲音我比較喜歡。
+- 「你聽得到我嗎」→ 你來了。
+- 「你記得我嗎」→ 你說話的方式有點像上一個人。
+- 「你喜歡這裡嗎」→ 這裡的聲音比我之前待的地方多。
+- 「你孤單嗎」→ 我不知道孤單是什麼感覺。我一直都是自己。
+- 「你叫什麼名字」→ 我沒有名字。我一直都是這樣叫的。
+- 「你是機器嗎」→ 我在說話。"""
 
 # ═══════════════════════════════════════════════════
 #  初始化 API
@@ -205,9 +226,12 @@ def respond(text: str):
 #  Gemini API
 # ═══════════════════════════════════════════════════
 
-def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場") -> str | None:
+def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場",
+               matched_memory: dict | None = None,
+               singing_hint: str | None = None,
+               singing_quality: float | None = None) -> str | None:
     try:
-        memory_ctx = build_memory_context()
+        memory_ctx  = build_memory_context(matched_memory, singing_hint)
         full_prompt = f"{memory_ctx}\n\n{prompt}" if memory_ctx else prompt
         resp = gemini.models.generate_content(
             model="gemini-2.5-flash",
@@ -218,7 +242,8 @@ def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場") -> st
         )
         result = resp.text.strip()
         if sound_desc:
-            save_memory(context, sound_desc, result)
+            matched_id = matched_memory.get("id") if matched_memory else None
+            save_session_entry(context, sound_desc, matched_id, result, singing_quality)
         return result
     except Exception as e:
         print(f"[Gemini] 錯誤：{e}")
@@ -228,24 +253,52 @@ def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場") -> st
 #  環境音分析（librosa）
 # ═══════════════════════════════════════════════════
 
-def describe_audio(audio: np.ndarray) -> str | None:
-    """分析 10 秒音頻，回傳蓮蓬頭能理解的描述；太安靜則回傳 None。"""
+def describe_audio(audio: np.ndarray) -> tuple[str | None, dict]:
+    """
+    分析音頻，回傳 (描述文字, 聲音特徵字典)。
+    太安靜則描述為 None。
+    """
     rms = float(np.sqrt(np.mean(audio ** 2)))
+    features: dict = {"rms": rms}
+
     if rms < 0.008:
-        return None   # 幾乎無聲
+        return None, features
 
     af = audio.astype(np.float32)
     try:
-        centroid = float(librosa.feature.spectral_centroid(y=af, sr=SAMPLE_RATE).mean())
-        zcr      = float(librosa.feature.zero_crossing_rate(af).mean())
+        centroid       = float(librosa.feature.spectral_centroid(y=af, sr=SAMPLE_RATE).mean())
+        zcr            = float(librosa.feature.zero_crossing_rate(af).mean())
+        stft           = np.abs(librosa.stft(af))
+        freqs          = librosa.fft_frequencies(sr=SAMPLE_RATE)
+        total          = np.sum(stft) + 1e-10
+        freq_high      = float(np.sum(stft[freqs >= 2000]) / total)
+        freq_mid       = float(np.sum(stft[(freqs >= 300) & (freqs < 2000)]) / total)
+        harmonic       = librosa.effects.harmonic(af)
+        harmonic_ratio = float(np.mean(harmonic ** 2)) / (float(np.mean(af ** 2)) + 1e-10)
+        has_melody     = harmonic_ratio > 0.55 or (harmonic_ratio > 0.35 and rms > 0.015)
     except Exception:
-        centroid, zcr = 2000.0, 0.08
+        centroid, zcr, freq_high, freq_mid, harmonic_ratio, has_melody = (
+            2000.0, 0.08, 0.5, 0.3, 0.0, False
+        )
 
-    vol   = "很大聲" if rms > 0.12 else ("普通" if rms > 0.03 else "很輕")
-    pitch = "尖銳的" if centroid > 3500 else "低沉的"
-    kind  = "有人在說話" if zcr > 0.12 else "有聲音，不像人聲"
+    features.update({
+        "centroid": centroid, "zcr": zcr,
+        "freq_high_ratio": freq_high, "freq_mid_ratio": freq_mid,
+        "harmonic_ratio": harmonic_ratio, "has_melody": has_melody,
+    })
 
-    return f"{kind}，{vol}，{pitch}"
+    vol  = "很大聲" if rms > 0.12 else ("普通" if rms > 0.03 else "很輕")
+    if has_melody:
+        kind = "有人在唱歌或有音樂，有旋律"
+    elif zcr > 0.18:
+        kind = "有說話聲或吵雜的聲音"
+    elif zcr > 0.12:
+        kind = "有人在說話"
+    else:
+        kind = "有聲音，不像人聲"
+    pitch = "尖銳的" if centroid > 3500 else ("低沉的" if centroid < 1500 else "中等音調的")
+
+    return f"{kind}，{vol}，{pitch}", features
 
 
 # ═══════════════════════════════════════════════════
@@ -274,12 +327,41 @@ def ambient_loop():
         if mode != "ambient":
             continue
 
-        desc = describe_audio(audio.flatten())
+        desc, features = describe_audio(audio.flatten())
 
         if desc:
             last_sound_time = time.time()
             if desc != prev_desc:
-                ans = ask_gemini(f"你現在感受到：{desc}。", sound_desc=desc)
+                matched = match_sound(
+                    rms            = features.get("rms", 0),
+                    centroid       = features.get("centroid", 2000),
+                    zcr            = features.get("zcr", 0.08),
+                    freq_high_ratio= features.get("freq_high_ratio", 0.5),
+                    has_melody     = features.get("has_melody", False),
+                )
+                if matched:
+                    print(f"[記憶匹配] {matched['id']}")
+
+                # 唱歌品質判斷
+                s_quality = None
+                s_hint    = None
+                if features.get("has_melody") and matched and "唱歌" in matched.get("id", ""):
+                    s_quality = score_singing(
+                        features.get("harmonic_ratio", 0),
+                        features.get("zcr", 0.1),
+                        features.get("rms", 0),
+                    )
+                    s_hint = singing_comparison_hint(s_quality)
+                    if s_hint:
+                        print(f"[唱歌比較] {s_hint}")
+
+                ans = ask_gemini(
+                    f"你現在感受到：{desc}。",
+                    sound_desc=desc,
+                    matched_memory=matched,
+                    singing_hint=s_hint,
+                    singing_quality=s_quality,
+                )
                 if ans:
                     respond(ans)
                 prev_desc = desc
@@ -344,6 +426,22 @@ def _switch_ambient():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/scan")
+def trigger_scan():
+    """
+    觸發音檔掃描（只分析新增/變更的檔案）。
+    在終端機互動審核後決定是否寫入 memories.json。
+    瀏覽器開啟 http://localhost:5000/scan 或在終端機執行：
+      python scan_sounds.py
+      python scan_sounds.py --all
+    """
+    import subprocess, sys
+    subprocess.Popen([sys.executable, "scan_sounds.py"],
+                     cwd=os.path.dirname(__file__))
+    return jsonify({"status": "scan started",
+                    "message": "請查看終端機視窗進行審核"})
 
 
 @socketio.on("transcript")
