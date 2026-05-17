@@ -32,6 +32,7 @@ from memory import (build_memory_context, save_session_entry, match_sound,
 from scan_sounds import scan as scan_audio_folder
 
 load_dotenv()
+load_dotenv("key.env", override=True)  # 支援 key.env 命名
 
 # ffmpeg PATH（M4A 等格式支援）
 _ffmpeg_dir = os.getenv("FFMPEG_DIR", "")
@@ -183,6 +184,40 @@ def send_to_oled(text: str):
             print(f"[OLED] 傳送失敗：{e}")
 
 # ═══════════════════════════════════════════════════
+#  機械感音效處理（Ring Modulation）
+# ═══════════════════════════════════════════════════
+
+def _apply_robot_effect(audio_bytes: bytes) -> bytes:
+    """
+    環形調製：把語音乘以低頻載波，製造金屬共鳴/機械感。
+    carrier_freq 越低越像低頻嗡嗡聲，40–80Hz 效果明顯。
+    depth 控制效果強度（0=無效果，1=完全環形調製）。
+    """
+    import io
+    from pydub import AudioSegment
+
+    seg    = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+    sr     = seg.frame_rate
+    ch     = seg.channels
+    samples = np.frombuffer(seg.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+
+    carrier_freq = 60.0   # Hz，可調：數字越小越沉、越大越像電話
+    depth        = 0.55   # 0.0–1.0，效果強度
+
+    t       = np.arange(len(samples)) / (sr * ch)
+    carrier = 1.0 - depth + depth * np.sin(2 * np.pi * carrier_freq * t)
+    samples = np.clip(samples * carrier, -1.0, 1.0)
+
+    result = AudioSegment(
+        (samples * 32767).astype(np.int16).tobytes(),
+        frame_rate=sr, sample_width=2, channels=ch,
+    )
+    buf = io.BytesIO()
+    result.export(buf, format="mp3", bitrate="128k")
+    return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════
 #  語音合成（ElevenLabs → pygame 播放）
 # ═══════════════════════════════════════════════════
 
@@ -191,13 +226,21 @@ def speak(text: str):
         print(f"[TTS] （無聲音 ID，略過）：{text}")
         return
     try:
+        from elevenlabs import VoiceSettings
         audio_gen  = eleven.text_to_speech.convert(
             text=text,
             voice_id=ELEVENLABS_VOICE,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
+            voice_settings=VoiceSettings(
+                stability=0.25,         # 低穩定性：聲音更粗糙、不均勻
+                similarity_boost=0.5,   # 降低相似度：帶更多雜質
+                style=0.4,              # 風格誇張化
+                use_speaker_boost=False,
+            ),
         )
         audio_bytes = b"".join(audio_gen)
+        audio_bytes = _apply_robot_effect(audio_bytes)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
             f.write(audio_bytes)

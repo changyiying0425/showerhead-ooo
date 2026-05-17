@@ -119,8 +119,13 @@
 蓮蓬頭/
 ├── CLAUDE.md              ← 本文件
 ├── main.py                ← Python 主程式（系統大腦）
+├── memory.py              ← 記憶系統（聲音庫 + 對話紀錄 + 唱歌比較）
+├── memories.json          ← 21 筆聲音記憶庫
+├── scan_sounds.py         ← 掃描音檔、互動式加入記憶庫
+├── test_response.py       ← 8 情境自動化回應測試
+├── test_voices.py         ← ElevenLabs 聲音試聽比較工具
 ├── requirements.txt       ← Python 套件清單
-├── .env                   ← API 金鑰（不上傳 GitHub）
+├── key.env                ← API 金鑰（不上傳 GitHub，等同 .env）
 ├── .env.example           ← 金鑰範本
 ├── .gitignore
 ├── README.md
@@ -137,8 +142,8 @@
 | 服務 | 狀態 |
 |------|------|
 | Gemini API（Google AI Studio） | ✅ 已設定，使用 `gemini-2.5-flash`，SDK 已升級至 `google-genai` |
-| ElevenLabs API key | ✅ 已設定於 .env |
-| ElevenLabs Voice ID | ✅ Adam（premade，免費可用 API） |
+| ElevenLabs API key | ✅ 已設定於 key.env |
+| ElevenLabs Voice ID | ✅ Bella（premade，免費可用 API，`EXAVITQu4vr4xnSDxMaL`） |
 
 ---
 
@@ -219,10 +224,21 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 ---
 
 ## 聲音設計
-- ElevenLabs 選低沉、偏沙啞的聲音作為基底（Voice ID：Adam premade）
-- Voicemeeter Banana 套用音效：壓低高頻、提升低頻
-- 效果：悶悶的、混雜的，像聲音被困在金屬腔體裡出不來
+- ElevenLabs 選年輕女聲作為基底（Voice ID：Bella premade，`EXAVITQu4vr4xnSDxMaL`）
+- Python 在播出前套用 **ring modulation**（60Hz 載波，depth=0.55）→ 機械質感
+- Voicemeeter Banana 套用 EQ：壓低高頻、提升低頻 → 悶、金屬腔體感
+- ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4`（活潑、不穩定感）
+- 效果疊加：活潑原聲 → ring modulation 機械化 → Voicemeeter 壓悶 → 最終輸出
 - **文字（OLED）是給觀眾讀懂的版本，聲音才是它真實的樣子**
+
+### 已測試可用的免費 premade 聲音（2026-05-18）
+| 聲音名稱 | Voice ID | 特性 |
+|----------|----------|------|
+| **Bella**（選用） | `EXAVITQu4vr4xnSDxMaL` | 女聲，年輕感，活潑 |
+| Adam | `pNInz6obpgDQGcFmaJgB` | 男聲，沉穩 |
+| Rachel | `21m00Tcm4TlvDq8ikWAM` | 女聲，清晰溫和 |
+| Antoni | `ErXwobaYiN019PkySvjV` | 男聲，自然流暢 |
+| Arnold | `VR6AewLTigWG4xSOukaG` | 男聲，低沉粗獷 |
 
 ---
 
@@ -287,7 +303,7 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 ---
 
 ## 待辦事項
-- [x] ElevenLabs：取得 API key + 選定 Voice ID 並填入 .env
+- [x] ElevenLabs：取得 API key + 選定 Voice ID 並填入 key.env
 - [x] Python 套件確認全部安裝完成
 - [x] VB-Cable 安裝（以系統管理員身份執行）
 - [x] Gemini → ElevenLabs → pygame 串聯測試通過
@@ -299,22 +315,26 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [x] memories.json 完整建立（21 筆聲音記憶，每筆含 sample_responses 6–11 句）
 - [x] test_response.py：自動化場景測試（8 情境，不需互動，使用真實音頻參數）
 - [x] 回應調校：雨聲、狗叫聲、「你是誰」對話引導語更新
+- [x] Voicemeeter 音效參數設定（EQ 完成，設定已儲存）
+- [x] 麥克風校準（靜音門檻 0.022，melody 偵測條件調校）
+- [x] 環境音模式完整測試通過（唱歌、說話、環境音皆可正確匹配）
+- [x] 聲音效果疊加完成（ring modulation + Voicemeeter EQ + VoiceSettings 活潑參數）
+- [x] ElevenLabs 聲音確定（Bella premade，已批次測試所有免費可用聲音）
+- [x] test_voices.py：多聲音試聽比較工具（含 ring modulation 效果）
 - [ ] 瀏覽器 Web Speech API 介面設定與測試
 - [ ] Arduino IDE 安裝 + U8g2 library
 - [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
 - [ ] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測
-- [x] Voicemeeter 音效參數設定（EQ 完成，設定已儲存）
-- [x] 麥克風校準（靜音門檻 0.022，melody 偵測條件調校）
-- [x] 環境音模式完整測試通過（唱歌、說話、環境音皆可正確匹配）
 - [ ] 展覽用 USB 麥克風（3.5mm TRRS 不相容，需更換）
 - [ ] 全系統整合測試（含 Arduino）
 
 ## 技術備註
 - Gemini SDK 已從 `google-generativeai`（已停止維護）升級至 `google-genai`
-- 使用模型：`gemini-2.5-flash`（自動從帳號可用模型清單選取最新版）
+- 使用模型：`gemini-2.5-flash`
 - ElevenLabs 免費方案只能使用 `premade` 聲音（不能用聲音庫社群聲音）
+- API 金鑰存於 `key.env`（等同 .env），main.py 以 `load_dotenv("key.env", override=True)` 載入
 - pygame 播放完畢後需呼叫 `pygame.mixer.music.unload()` 再刪除暫存檔，避免 Windows 檔案鎖定
-- M4A 等非標準格式透過 ffmpeg 轉成臨時 WAV 再用 librosa 分析，FFMPEG_DIR 設定於 .env
+- M4A 等非標準格式透過 ffmpeg 轉成臨時 WAV 再用 librosa 分析，FFMPEG_DIR 設定於 key.env
 - memories.json v1.2：21 筆聲音記憶，含公園、捷運、雨聲、唱歌（中/英文）等
 - 唱歌品質分數：hr×0.6 + zcr_stability×0.3 + rms×0.1，比較差距 > 0.08 才輸出比較語
 - melody 偵測條件：`harmonic_ratio > 0.65 and zcr < 0.07`（說話不觸發，需真正唱歌）
@@ -322,5 +342,7 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - 靜音門檻：`rms < 0.022`（依 2026-05-18 麥克風校準結果設定）
 - 3.5mm TRRS 麥克風（JGL-119H）與筆電不相容，暫用內建 Microphone Array
 - `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
+- **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
+- ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4, use_speaker_boost=False`
 
-*最後更新：2026-05-18（Voicemeeter 音效設定完成、麥克風校準、環境音模式測試通過）*
+*最後更新：2026-05-18（聲音效果完成：ring modulation + Voicemeeter EQ + Bella 聲音）*

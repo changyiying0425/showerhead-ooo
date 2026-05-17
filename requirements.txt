@@ -9,3 +9,4 @@ flask>=3.0
 flask-socketio>=5.3
 python-dotenv>=1.0
 pygame>=2.5
+pydub>=0.25
