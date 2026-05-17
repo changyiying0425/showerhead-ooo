@@ -158,29 +158,36 @@
 | 元件 | 用途 | 狀態 |
 |------|------|------|
 | Arduino Nano | 讀取 FSR、驅動 OLED | ✅ 已有 |
-| 1.3吋 OLED SPI 128×64（SH1106） | 顯示文字 | ❌ 待購買 |
-| FSR 壓力感測器 | 偵測握力 | ❌ 待購買 |
-| 10kΩ 電阻 | FSR 分壓電路 | ❌ 待購買 |
-| USB 麥克風 | 收音 | ❌ 待購買 |
-| USB 有源喇叭 | 播出聲音 | ❌ 待購買 |
-| USB 集線器 | 同時接多個 USB | ❌ 待購買 |
-| 塑膠蓮蓬頭 | 主體外觀 | ❌ 待購買 |
-| PVC 水管 | 連接蓮蓬頭到箱體 | ❌ 待購買 |
-| 夾板或木心板 | 箱體與牆壁結構 | ❌ 待購買 |
-| 活動輪附煞車 | 箱體底部 | ❌ 待購買 |
-| 延長線 | 展場供電 | ❌ 待購買 |
+| 1.3吋 OLED SPI 128×64（SH1106） | 顯示文字 | ✅ 已有 |
+| FSR 壓力感測器 | 偵測握力 | ✅ 已有 |
+| 10kΩ 電阻 | FSR 分壓電路 | ✅ 已有 |
+| USB 麥克風 | 收音 | ✅ 已有 |
+| USB 有源喇叭 | 播出聲音 | ⚠️ 暫用電腦喇叭替代 |
+| USB 集線器 | 同時接多個 USB | ✅ 已有 |
+| 塑膠蓮蓬頭 | 主體外觀 | ✅ 已有 |
+| PVC 水管 | 連接蓮蓬頭到箱體 | ✅ 已有 |
+| 夾板或木心板 | 箱體與牆壁結構 | ✅ 已有 |
+| 活動輪附煞車 | 箱體底部 | ✅ 已有 |
+| 延長線 | 展場供電 | ✅ 已有 |
 
 ---
 
 ## Arduino 接線
 ```
-A0  ← FSR（另一端接 3.3V；A0 與 GND 之間接 10kΩ）
-D13 ← OLED SCK
-D11 ← OLED MOSI
-D10 ← OLED CS
-D9  ← OLED DC
-D8  ← OLED RST
-USB → 筆電（透過 USB 集線器）
+FSR 分壓電路（不使用麵包板，直接焊接或絞接）：
+  FSR 一端 → 3.3V
+  FSR 另一端 → A0，同時接 10kΩ 電阻到 GND
+
+OLED SH1106 SPI：
+  OLED SCK  → D13
+  OLED MOSI → D11
+  OLED CS   → D10
+  OLED DC   → D9
+  OLED RST  → D8
+  OLED VCC  → 3.3V
+  OLED GND  → GND
+
+Arduino Nano USB → 筆電（透過 USB 集線器）
 ```
 Arduino IDE 需安裝 Library：**U8g2 by oliver**
 
@@ -246,8 +253,8 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [x] 回應調校：雨聲、狗叫聲、「你是誰」對話引導語更新
 - [ ] 瀏覽器 Web Speech API 介面設定與測試
 - [ ] Arduino IDE 安裝 + U8g2 library
-- [ ] 購買缺少的硬體元件
-- [ ] 硬體到貨後：燒錄 Arduino、測試 OLED + FSR
+- [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
+- [ ] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測
 - [ ] Voicemeeter 音效參數設定
 - [ ] 全系統整合測試
 
@@ -260,4 +267,4 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - memories.json v1.2：21 筆聲音記憶，含公園、捷運、雨聲、唱歌（中/英文）等
 - 唱歌品質分數：hr×0.6 + zcr_stability×0.3 + rms×0.1，比較差距 > 0.08 才輸出比較語
 
-*最後更新：2026-05-17*
+*最後更新：2026-05-17（硬體備齊，進入燒錄與整合階段）*
