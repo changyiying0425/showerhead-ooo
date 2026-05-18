@@ -5,7 +5,7 @@
 - **物件**：蓮蓬頭
 - **形式**：互動裝置，展覽展出
 - **GitHub**：https://github.com/changyiying0425/showerhead-ooo
-- **專案路徑**：`C:\Users\咦\Downloads\蓮蓬頭\`
+- **專案路徑**：`C:\AI\claude\蓮蓬頭\`
 
 ---
 
