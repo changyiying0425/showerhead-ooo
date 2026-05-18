@@ -3,21 +3,20 @@
 //
 // 接線：
 //   FSR  → A0（另一端接 3.3V，A0 與 GND 之間接 10kΩ）
-//   OLED SCK  → D13
-//   OLED MOSI → D11
-//   OLED CS   → D10
-//   OLED DC   → D9
-//   OLED RST  → D8
+//   OLED GND → GND
+//   OLED VCC → 3.3V
+//   OLED SCK → A5 (SCL)
+//   OLED SDA → A4 (SDA)
 //
 // 需要安裝的 Library（Arduino IDE → Library Manager）：
 //   - U8g2 by oliver
 
 #include <Arduino.h>
-#include <SPI.h>
+#include <Wire.h>
 #include <U8g2lib.h>
 
-// SH1106 128x64 SPI（1.3吋 OLED）
-U8G2_SH1106_128X64_NONAME_F_4W_HW_SPI u8g2(U8G2_R0, /*CS=*/10, /*DC=*/9, /*RST=*/8);
+// SH1106 128x64 I2C（1.3吋 OLED，4 腳位 IIC 版本）
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 const int FSR_PIN       = A0;
 const int FSR_THRESHOLD = 200;   // 0~1023，調大 = 需要更大力才觸發

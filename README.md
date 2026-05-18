@@ -65,7 +65,7 @@
 | 元件 | 用途 | 狀態 |
 |------|------|------|
 | Arduino Nano | 讀取 FSR、驅動 OLED |
-| 1.3吋 OLED SPI 128×64（SH1106） | 顯示文字 | 
+| 1.3吋 OLED I2C 128×64（SH1106） | 顯示文字 | 
 | FSR 壓力感測器 | 偵測觀眾握力 | 
 | 10kΩ 電阻 | FSR 分壓 |
 | USB 麥克風 | 收音 |
@@ -79,11 +79,10 @@
 **接線（Arduino Nano）：**
 ```
 A0  ← FSR（另一端接 3.3V；A0 與 GND 之間接 10kΩ）
-D13 ← OLED SCK
-D11 ← OLED MOSI
-D10 ← OLED CS
-D9  ← OLED DC
-D8  ← OLED RST
+A5  ← OLED SCK（SCL）
+A4  ← OLED SDA
+3.3V → OLED VCC
+GND  → OLED GND
 ```
 
 ---

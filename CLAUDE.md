@@ -163,7 +163,7 @@
 | 元件 | 用途 | 狀態 |
 |------|------|------|
 | Arduino Nano | 讀取 FSR、驅動 OLED | ✅ 已有 |
-| 1.3吋 OLED SPI 128×64（SH1106） | 顯示文字 | ✅ 已有 |
+| 1.3吋 OLED I2C 128×64（SH1106） | 顯示文字 | ✅ 已有 |
 | FSR 壓力感測器 | 偵測握力 | ✅ 已有 |
 | 10kΩ 電阻 | FSR 分壓電路 | ✅ 已有 |
 | USB 麥克風 | 收音 | ⚠️ 3.5mm TRRS 麥克風無法正常收音，暫用筆電內建 Microphone Array |
@@ -183,14 +183,11 @@ FSR 分壓電路（不使用麵包板，直接焊接或絞接）：
   FSR 一端 → 3.3V
   FSR 另一端 → A0，同時接 10kΩ 電阻到 GND
 
-OLED SH1106 SPI：
-  OLED SCK  → D13
-  OLED MOSI → D11
-  OLED CS   → D10
-  OLED DC   → D9
-  OLED RST  → D8
-  OLED VCC  → 3.3V
-  OLED GND  → GND
+OLED SH1106 I2C（4 腳位 IIC 版本）：
+  OLED GND → GND
+  OLED VCC → 3.3V
+  OLED SCK → A5 (SCL)
+  OLED SDA → A4 (SDA)
 
 Arduino Nano USB → 筆電（透過 USB 集線器）
 ```
