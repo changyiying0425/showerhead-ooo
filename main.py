@@ -69,7 +69,6 @@ SYSTEM_PROMPT = """你是一個蓮蓬頭。
 
 你偶爾自言自語，因為你有感受。
 你的回應不超過兩句話。
-每次回應用不同的說法，不重複剛才說過的形容詞或句式。
 
 ---
 
@@ -179,10 +178,13 @@ def send_to_oled(text: str):
     if arduino and arduino.is_open:
         try:
             bitmap = text_to_oled_bytes(text)
-            arduino.write(bytes([0xFF, 0xFE, 0xFD]))
-            arduino.write(bitmap)
+            arduino.write(bytes([0xFF, 0xFE, 0xFD]) + bitmap)
+            arduino.flush()
+            print(f"[OLED] 傳送：{text[:30]}")
         except Exception as e:
             print(f"[OLED] 傳送失敗：{e}")
+    else:
+        print("[OLED] 未連線，跳過傳送")
 
 # ═══════════════════════════════════════════════════
 #  機械感音效處理（Ring Modulation）
@@ -274,26 +276,25 @@ def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場",
                matched_memory: dict | None = None,
                singing_hint: str | None = None,
                singing_quality: float | None = None) -> str | None:
-    try:
-        memory_ctx  = build_memory_context(matched_memory, singing_hint)
-        full_prompt = f"{memory_ctx}\n\n{prompt}" if memory_ctx else prompt
-        resp = gemini.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=full_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=1.4,      # 高溫：更多變化、更不重複
-                max_output_tokens=80, # 硬限制長度，確保不超過兩句
-            ),
-        )
-        result = resp.text.strip()
-        if sound_desc:
-            matched_id = matched_memory.get("id") if matched_memory else None
-            save_session_entry(context, sound_desc, matched_id, result, singing_quality)
-        return result
-    except Exception as e:
-        print(f"[Gemini] 錯誤：{e}")
-        return None
+    memory_ctx  = build_memory_context(matched_memory, singing_hint)
+    full_prompt = f"{memory_ctx}\n\n{prompt}" if memory_ctx else prompt
+    for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite-preview-06-17"]:
+        try:
+            resp = gemini.models.generate_content(
+                model=model,
+                contents=full_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                ),
+            )
+            result = resp.text.strip()
+            if sound_desc:
+                matched_id = matched_memory.get("id") if matched_memory else None
+                save_session_entry(context, sound_desc, matched_id, result, singing_quality)
+            return result
+        except Exception as e:
+            print(f"[Gemini] {model} 錯誤：{e}")
+    return None
 
 # ═══════════════════════════════════════════════════
 #  環境音分析（librosa）
@@ -307,7 +308,7 @@ def describe_audio(audio: np.ndarray) -> tuple[str | None, dict]:
     rms = float(np.sqrt(np.mean(audio ** 2)))
     features: dict = {"rms": rms}
 
-    if rms < 0.022:
+    if rms < 0.015:
         return None, features
 
     af = audio.astype(np.float32)
@@ -323,8 +324,8 @@ def describe_audio(audio: np.ndarray) -> tuple[str | None, dict]:
         harmonic_ratio = float(np.mean(harmonic ** 2)) / (float(np.mean(af ** 2)) + 1e-10)
         # 唱歌：harmonic_ratio 高 + ZCR 低（音符持續、穩定）
         # 說話：harmonic_ratio 中 + ZCR 較高（音高變化快）
-        has_melody = (harmonic_ratio > 0.65 and zcr < 0.07) or \
-                     (harmonic_ratio > 0.55 and zcr < 0.05 and rms > 0.025)
+        has_melody = (harmonic_ratio > 0.92 and zcr < 0.04) or \
+                     (harmonic_ratio > 0.88 and zcr < 0.03 and rms > 0.025)
     except Exception:
         centroid, zcr, freq_high, freq_mid, harmonic_ratio, has_melody = (
             2000.0, 0.08, 0.5, 0.3, 0.0, False
@@ -380,7 +381,7 @@ def ambient_loop():
         rms_val = features.get("rms", 0)
         zcr_val = features.get("zcr", 0)
         hr_val  = features.get("harmonic_ratio", 0)
-        print(f"[偵測] rms={rms_val:.4f}  zcr={zcr_val:.3f}  hr={hr_val:.3f}  {'有聲音' if desc else '安靜（rms<0.022）'}  melody={features.get('has_melody', False)}")
+        print(f"[偵測] rms={rms_val:.4f}  zcr={zcr_val:.3f}  hr={hr_val:.3f}  {'有聲音' if desc else '安靜（rms<0.015）'}  melody={features.get('has_melody', False)}")
 
         if desc:
             last_sound_time = time.time()
@@ -409,11 +410,8 @@ def ambient_loop():
                     if s_hint:
                         print(f"[唱歌比較] {s_hint}")
 
-                # 有匹配到記憶：用記憶名稱，讓 Gemini 有具體脈絡
-                # 沒有匹配：退回音頻技術描述
-                sound_label = matched["id"] if matched else desc
                 ans = ask_gemini(
-                    f"你現在感受到：{sound_label}。",
+                    f"你現在感受到：{desc}。",
                     sound_desc=desc,
                     matched_memory=matched,
                     singing_hint=s_hint,
@@ -441,6 +439,7 @@ def arduino_loop():
     try:
         arduino = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
         time.sleep(2)   # 等待 Arduino 重置
+        arduino.reset_input_buffer()  # 清掉殘留資料
         print(f"[Arduino] 連線成功：{SERIAL_PORT}")
         send_to_oled("...")
     except Exception as e:
@@ -456,6 +455,8 @@ def arduino_loop():
                     _switch_dialogue()
                 elif line == "RELEASE":
                     _switch_ambient()
+                elif line.startswith("BMAP"):
+                    print(f"[OLED] Arduino 回報：{line}")
         except Exception as e:
             print(f"[Arduino] 讀取錯誤：{e}")
             time.sleep(1)
@@ -507,7 +508,7 @@ def on_transcript(data):
     if not text or mode != "dialogue":
         return
     print(f"觀眾說：{text}")
-    ans = ask_gemini(text, sound_desc=text, context="對話")
+    ans = ask_gemini(text)
     if ans:
         respond(ans)
 

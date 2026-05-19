@@ -109,7 +109,7 @@
 | USB 喇叭 | 播出處理後的聲音 |
 
 ### Serial 通訊協定
-- Arduino → Python：`HOLD\n` / `RELEASE\n`
+- Arduino → Python：`HOLD\n` / `RELEASE\n` / `BMAP_OK\n` / `BMAP_TIMEOUT:{n}\n`
 - Python → Arduino：`[0xFF 0xFE 0xFD]` + 1024 bytes 點陣圖（SH1106 U8g2 格式）
 
 ---
@@ -120,7 +120,7 @@
 ├── CLAUDE.md              ← 本文件
 ├── main.py                ← Python 主程式（系統大腦）
 ├── memory.py              ← 記憶系統（聲音庫 + 對話紀錄 + 唱歌比較）
-├── memories.json          ← 26 筆聲音記憶庫
+├── memories.json          ← 21 筆聲音記憶庫
 ├── scan_sounds.py         ← 掃描音檔、互動式加入記憶庫
 ├── test_response.py       ← 8 情境自動化回應測試
 ├── test_voices.py         ← ElevenLabs 聲音試聽比較工具
@@ -152,7 +152,8 @@
 |------|------|
 | Python 3.13.7 | ✅ 已安裝（已加入 PATH） |
 | Python 套件（requirements.txt） | ✅ 全部安裝完成 |
-| Arduino IDE | ❌ 待安裝 |
+| Arduino IDE 2.3.8（官網版） | ✅ 已安裝（注意：Windows Store 版無法存取 COM port，需用官網 .exe） |
+| CH340 驅動（CH341SER.EXE） | ✅ 已安裝（Arduino Nano clone 用 CH340 晶片） |
 | Voicemeeter Banana | ✅ 已安裝，EQ + A1 輸出設定完成（見下方音效設定章節） |
 | VB-Cable | ✅ 已安裝（重新安裝 v2.1.5.8） |
 | Chrome 瀏覽器 | ✅ |
@@ -281,9 +282,10 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 | 唱歌 | 0.063 |
 
 ### 靜音門檻設定
-- `main.py` 靜音門檻：`rms < 0.022`
+- `main.py` 靜音門檻：`rms < 0.015`
 - 低於此值視為安靜，不觸發 Gemini 回應
-- melody 偵測條件：`harmonic_ratio > 0.65 and zcr < 0.07`
+- melody 偵測條件：`(harmonic_ratio > 0.92 and zcr < 0.04) or (harmonic_ratio > 0.88 and zcr < 0.03 and rms > 0.025)`
+- 說話的 hr 約 0.857–0.882，需 hr > 0.92 才算唱歌，避免誤判
 
 ---
 
@@ -309,39 +311,41 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [x] 全部音訊檔分析完成（21 筆，含 M4A 支援，使用 ffmpeg 轉檔）
 - [x] 唱歌品質比較系統（harmonic ratio 評分，前後場次比較，差距 > 0.08 才觸發）
 - [x] scan_sounds.py：自動掃描新音檔，互動式加入 memories.json
-- [x] memories.json 完整建立（26 筆聲音記憶，每筆含 sample_responses）
-- [x] memories.json 擴充（新增笑聲×2、唱歌中文快/慢、咳嗽大聲、貓叫低沉；移除舊唱歌中文）
-- [x] test_response.py：自動化場景測試（8 情境，不需互動，使用真實音頻參數，8/8 通過）
+- [x] memories.json 完整建立（21 筆聲音記憶，每筆含 sample_responses 6–11 句）
+- [x] test_response.py：自動化場景測試（8 情境，不需互動，使用真實音頻參數）
 - [x] 回應調校：雨聲、狗叫聲、「你是誰」對話引導語更新
 - [x] Voicemeeter 音效參數設定（EQ 完成，設定已儲存）
-- [x] 麥克風校準（靜音門檻 0.022，melody 偵測條件調校）
+- [x] 麥克風校準（靜音門檻調整為 0.015，melody 偵測條件調校）
 - [x] 環境音模式完整測試通過（唱歌、說話、環境音皆可正確匹配）
 - [x] 聲音效果疊加完成（ring modulation + Voicemeeter EQ + VoiceSettings 活潑參數）
 - [x] ElevenLabs 聲音確定（Bella premade，已批次測試所有免費可用聲音）
 - [x] test_voices.py：多聲音試聽比較工具（含 ring modulation 效果）
-- [x] Gemini 回應品質改善（temperature=1.4、max_output_tokens=80、ambient 改用記憶 ID）
 - [ ] 瀏覽器 Web Speech API 介面設定與測試
-- [ ] Arduino IDE 安裝 + U8g2 library
+- [x] Arduino IDE 安裝 + U8g2 library（官網版 2.3.8，CH340 驅動 CH341SER.EXE）
 - [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
-- [ ] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測
+- [x] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測（2026-05-19 完成）
 - [ ] 展覽用 USB 麥克風（3.5mm TRRS 不相容，需更換）
-- [ ] 全系統整合測試（含 Arduino）
+- [ ] 全系統整合測試（含 Arduino + Web Speech）
 
 ## 技術備註
 - Gemini SDK 已從 `google-generativeai`（已停止維護）升級至 `google-genai`
-- 使用模型：`gemini-2.5-flash`
+- 使用模型：`gemini-2.5-flash`，fallback：`gemini-2.5-flash-lite-preview-06-17`（gemini-2.0/1.5 已 404）
 - ElevenLabs 免費方案只能使用 `premade` 聲音（不能用聲音庫社群聲音）
 - API 金鑰存於 `key.env`（等同 .env），main.py 以 `load_dotenv("key.env", override=True)` 載入
 - pygame 播放完畢後需呼叫 `pygame.mixer.music.unload()` 再刪除暫存檔，避免 Windows 檔案鎖定
 - M4A 等非標準格式透過 ffmpeg 轉成臨時 WAV 再用 librosa 分析，FFMPEG_DIR 設定於 key.env
 - memories.json v1.2：21 筆聲音記憶，含公園、捷運、雨聲、唱歌（中/英文）等
 - 唱歌品質分數：hr×0.6 + zcr_stability×0.3 + rms×0.1，比較差距 > 0.08 才輸出比較語
-- melody 偵測條件：`harmonic_ratio > 0.65 and zcr < 0.07`（說話不觸發，需真正唱歌）
+- melody 偵測條件：`(hr > 0.92 and zcr < 0.04) or (hr > 0.88 and zcr < 0.03 and rms > 0.025)`（說話 hr 約 0.86–0.88，不觸發）
 - 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
-- 靜音門檻：`rms < 0.022`（依 2026-05-18 麥克風校準結果設定）
+- 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）
 - 3.5mm TRRS 麥克風（JGL-119H）與筆電不相容，暫用內建 Microphone Array
 - `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
 - **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
 - ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4, use_speaker_boost=False`
+- Arduino loop() 不使用 `delay()`，改用 `millis()` 計時 FSR（delay 會造成 64 byte serial buffer overflow）
+- Arduino serial buffer 64 bytes，Python 一次送 1027 bytes，必須零 delay 才能即時消化
+- Windows Store 版 Arduino IDE 無法存取 COM port（沙盒限制），需用官網 .exe 安裝版
+- Arduino Nano clone 使用 CH340 晶片，需安裝 CH341SER.EXE 驅動；燒錄選 ATmega328P (Old Bootloader)
 
-*最後更新：2026-05-19（記憶庫擴充至 26 筆、Gemini 回應品質改善、test_response 8/8 通過）*
+*最後更新：2026-05-19（Arduino 燒錄完成、OLED + FSR 測試通過、聲音門檻調整）*
