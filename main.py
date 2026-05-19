@@ -69,6 +69,7 @@ SYSTEM_PROMPT = """你是一個蓮蓬頭。
 
 你偶爾自言自語，因為你有感受。
 你的回應不超過兩句話。
+每次回應用不同的說法，不重複剛才說過的形容詞或句式。
 
 ---
 
@@ -281,6 +282,8 @@ def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場",
             contents=full_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
+                temperature=1.4,      # 高溫：更多變化、更不重複
+                max_output_tokens=80, # 硬限制長度，確保不超過兩句
             ),
         )
         result = resp.text.strip()
@@ -406,8 +409,11 @@ def ambient_loop():
                     if s_hint:
                         print(f"[唱歌比較] {s_hint}")
 
+                # 有匹配到記憶：用記憶名稱，讓 Gemini 有具體脈絡
+                # 沒有匹配：退回音頻技術描述
+                sound_label = matched["id"] if matched else desc
                 ans = ask_gemini(
-                    f"你現在感受到：{desc}。",
+                    f"你現在感受到：{sound_label}。",
                     sound_desc=desc,
                     matched_memory=matched,
                     singing_hint=s_hint,
@@ -501,7 +507,7 @@ def on_transcript(data):
     if not text or mode != "dialogue":
         return
     print(f"觀眾說：{text}")
-    ans = ask_gemini(text)
+    ans = ask_gemini(text, sound_desc=text, context="對話")
     if ans:
         respond(ans)
 
