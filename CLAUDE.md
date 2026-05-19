@@ -120,7 +120,7 @@
 ├── CLAUDE.md              ← 本文件
 ├── main.py                ← Python 主程式（系統大腦）
 ├── memory.py              ← 記憶系統（聲音庫 + 對話紀錄 + 唱歌比較）
-├── memories.json          ← 21 筆聲音記憶庫
+├── memories.json          ← 26 筆聲音記憶庫
 ├── scan_sounds.py         ← 掃描音檔、互動式加入記憶庫
 ├── test_response.py       ← 8 情境自動化回應測試
 ├── test_voices.py         ← ElevenLabs 聲音試聽比較工具
@@ -309,8 +309,9 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [x] 全部音訊檔分析完成（21 筆，含 M4A 支援，使用 ffmpeg 轉檔）
 - [x] 唱歌品質比較系統（harmonic ratio 評分，前後場次比較，差距 > 0.08 才觸發）
 - [x] scan_sounds.py：自動掃描新音檔，互動式加入 memories.json
-- [x] memories.json 完整建立（21 筆聲音記憶，每筆含 sample_responses 6–11 句）
-- [x] test_response.py：自動化場景測試（8 情境，不需互動，使用真實音頻參數）
+- [x] memories.json 完整建立（26 筆聲音記憶，每筆含 sample_responses）
+- [x] memories.json 擴充（新增笑聲×2、唱歌中文快/慢、咳嗽大聲、貓叫低沉；移除舊唱歌中文）
+- [x] test_response.py：自動化場景測試（8 情境，不需互動，使用真實音頻參數，8/8 通過）
 - [x] 回應調校：雨聲、狗叫聲、「你是誰」對話引導語更新
 - [x] Voicemeeter 音效參數設定（EQ 完成，設定已儲存）
 - [x] 麥克風校準（靜音門檻 0.022，melody 偵測條件調校）
@@ -318,6 +319,7 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [x] 聲音效果疊加完成（ring modulation + Voicemeeter EQ + VoiceSettings 活潑參數）
 - [x] ElevenLabs 聲音確定（Bella premade，已批次測試所有免費可用聲音）
 - [x] test_voices.py：多聲音試聽比較工具（含 ring modulation 效果）
+- [x] Gemini 回應品質改善（temperature=1.4、max_output_tokens=80、ambient 改用記憶 ID）
 - [ ] 瀏覽器 Web Speech API 介面設定與測試
 - [ ] Arduino IDE 安裝 + U8g2 library
 - [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
@@ -342,4 +344,4 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
 - ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4, use_speaker_boost=False`
 
-*最後更新：2026-05-18（聲音效果完成：ring modulation + Voicemeeter EQ + Bella 聲音）*
+*最後更新：2026-05-19（記憶庫擴充至 26 筆、Gemini 回應品質改善、test_response 8/8 通過）*

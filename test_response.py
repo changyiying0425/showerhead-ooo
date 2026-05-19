@@ -12,6 +12,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 from dotenv import load_dotenv
 load_dotenv()
+load_dotenv("key.env", override=True)
 
 _ffmpeg_dir = os.getenv("FFMPEG_DIR", "")
 if _ffmpeg_dir and _ffmpeg_dir not in os.environ.get("PATH", ""):
