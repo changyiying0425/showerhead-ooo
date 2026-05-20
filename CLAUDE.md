@@ -72,45 +72,77 @@
 
 ## 系統架構
 
+### 完整互動流程（含重置機制）
+```
+觀者拿起蓮蓬頭 → 微動開關 OFF（觸發拿起事件）
+→ 觀者手碰觸 FSR → Arduino 送 HOLD\n → Python 進入對話模式
+  → VAD 靜音偵測切段 → 音訊直送 Gemini multimodal
+  → Gemini 回應 → OLED 顯示 + ElevenLabs TTS → 喇叭
+  → 觀者手離開 FSR → Arduino 送 RELEASE\n → 回到環境音模式
+→ 觀者掛回蓮蓬頭 → 微動開關 ON → Arduino 送 HANG\n
+  → Python 清除此段對話記憶（conversation_history）
+  → 重置完成，等待下一位觀者
+```
+
 ### 互動模式
 
-**模式一：環境音模式（預設）**
+**模式一：環境音模式（預設，FSR 未觸發）**
 ```
-麥克風 → librosa 分析聲音特徵（音量、頻率）
-→ 每10秒分析一次，有明顯變化才觸發
+麥克風 → Gemini multimodal 音訊輸入（直接傳音訊片段）
+→ 每10秒分析一次，有明顯聲音變化才觸發
 → Gemini API（蓮蓬頭個性回應）
 → OLED 顯示文字 + ElevenLabs TTS → Voicemeeter → 喇叭
 超過30秒安靜 → 自動自言自語
 ```
+> ⚠️ 升級計畫：從 librosa 數值描述改為音訊直接送 Gemini multimodal，Gemini 能自行判斷聲音內容（歌聲、哭聲、環境音、咳嗽等），不再依賴數值特徵提取。尚未實作，待 skill 文件完成後進行。
 
-**模式二：對話模式（觀眾握住時）**
+**模式二：對話模式（觀眾握住 FSR 時）**
 ```
-觀眾握住蓮蓬頭握把
-→ FSR 壓力感測器 → Arduino Nano → Python
-→ Chrome Web Speech API 收音
-→ 語音轉文字 → Gemini API
+FSR HOLD → Python 開始錄音 + 即時監測 RMS
+→ 有聲音（RMS > 0.015）→ 持續累積音訊
+→ 靜音持續超過 800ms（VAD 斷句）→ 判定這句話說完
+→ 送出音訊片段給 Gemini multimodal
+→ Gemini 直接分析音訊內容（含語音辨識）→ 回應
 → OLED 顯示文字 + ElevenLabs TTS → Voicemeeter → 喇叭
-→ 觀眾放開 → 回到環境音模式
+→ 繼續監測下一句，直到 FSR RELEASE
 ```
+> ⚠️ 升級計畫：取代現有 Chrome Web Speech API 語音轉文字流程，改為音訊直送 Gemini multimodal。尚未實作。
+
+**模式三：重置模式（蓮蓬頭掛回時）**
+```
+微動開關 ON → Arduino 送 HANG\n → Python 清除 conversation_history
+→ 重置 session_log → 回到環境音模式待機
+```
+> 作用：每位觀眾的對話記憶在物理動作（掛回）時清除，避免跨觀眾對話跑偏。每次對話都是全新開始。
 
 ### 各角色分工
 | 角色 | 負責 |
 |------|------|
-| FSR 壓力感測器 | 偵測觀眾握住蓮蓬頭 |
-| Arduino Nano | 讀取 FSR、驅動 OLED、傳訊號給 Python |
-| 麥克風 | 收環境音及觀眾說話 |
-| Chrome 網頁 | Web Speech API 語音轉文字 |
-| Python（main.py） | 整個系統的大腦，串聯所有服務 |
-| librosa | 分析環境音特徵 |
-| Gemini API | 用蓮蓬頭個性思考、產生回應 |
+| 微動開關 | 偵測蓮蓬頭是否被取下或掛回，觸發重置 |
+| FSR 壓力感測器 | 偵測觀眾握住蓮蓬頭，切換對話模式 |
+| Arduino Nano | 讀取微動開關 + FSR、驅動 OLED、傳訊號給 Python |
+| 麥克風 | 收環境音及觀眾說話聲音 |
+| Python（main.py） | 整個系統的大腦，串聯所有服務，管理對話記憶 |
+| VAD（RMS 靜音偵測） | 對話模式中偵測句尾（靜音 > 800ms），切出音訊片段 |
+| Gemini multimodal API | 直接分析音訊內容，產生蓮蓬頭個性回應（取代 librosa + Web Speech） |
 | ElevenLabs | 文字轉語音 |
 | Voicemeeter Banana | 所有播出聲音自動加悶聲混響 |
 | OLED 螢幕 | 顯示文字，觀眾讀懂用 |
 | USB 喇叭 | 播出處理後的聲音 |
+| ~~librosa~~ | ~~分析環境音特徵~~ → 升級後由 Gemini multimodal 取代 |
+| ~~Chrome Web Speech API~~ | ~~語音轉文字~~ → 升級後由 Gemini multimodal 取代 |
 
 ### Serial 通訊協定
-- Arduino → Python：`HOLD\n` / `RELEASE\n` / `BMAP_OK\n` / `BMAP_TIMEOUT:{n}\n`
+- Arduino → Python：`HOLD\n` / `RELEASE\n` / `HANG\n` / `BMAP_OK\n` / `BMAP_TIMEOUT:{n}\n`
 - Python → Arduino：`[0xFF 0xFE 0xFD]` + 1024 bytes 點陣圖（SH1106 U8g2 格式）
+
+| 訊號 | 觸發條件 | Python 動作 |
+|------|----------|-------------|
+| `HOLD\n` | FSR 偵測到握力 | 進入對話模式，開始 VAD 錄音 |
+| `RELEASE\n` | FSR 放開 | 離開對話模式，回到環境音模式 |
+| `HANG\n` | 微動開關觸發（蓮蓬頭掛回） | 清除 conversation_history，重置 session |
+| `BMAP_OK\n` | OLED 點陣圖接收完成 | 確認顯示成功 |
+| `BMAP_TIMEOUT:{n}\n` | OLED 點陣圖接收逾時 | 重傳或略過 |
 
 ---
 
@@ -163,10 +195,11 @@
 ## 硬體採購清單
 | 元件 | 用途 | 狀態 |
 |------|------|------|
-| Arduino Nano | 讀取 FSR、驅動 OLED | ✅ 已有 |
+| Arduino Nano | 讀取 FSR + 微動開關、驅動 OLED | ✅ 已有 |
 | 1.3吋 OLED I2C 128×64（SH1106） | 顯示文字 | ✅ 已有 |
-| FSR 壓力感測器 | 偵測握力 | ✅ 已有 |
+| FSR 壓力感測器 | 偵測握力，切換對話模式 | ✅ 已有 |
 | 10kΩ 電阻 | FSR 分壓電路 | ✅ 已有 |
+| **微動開關（Micro Switch）** | **偵測蓮蓬頭掛回，觸發對話記憶重置** | ❌ **待採購** |
 | USB 麥克風 | 收音 | ⚠️ 3.5mm TRRS 麥克風無法正常收音，暫用筆電內建 Microphone Array |
 | USB 有源喇叭 | 播出聲音 | ⚠️ 暫用電腦喇叭替代 |
 | USB 集線器 | 同時接多個 USB | ✅ 已有 |
@@ -190,9 +223,20 @@ OLED SH1106 I2C（4 腳位 IIC 版本）：
   OLED SCK → A5 (SCL)
   OLED SDA → A4 (SDA)
 
+微動開關（重置機制，待實作）：
+  微動開關 COM → GND
+  微動開關 NO  → D2（數位腳位，使用 INPUT_PULLUP）
+  說明：蓮蓬頭掛回時按下開關 → D2 讀到 LOW → Arduino 送 HANG\n 給 Python
+
 Arduino Nano USB → 筆電（透過 USB 集線器）
 ```
 Arduino IDE 需安裝 Library：**U8g2 by oliver**
+
+### 微動開關邏輯說明
+- 掛架設計：掛鉤位置裝一顆微動開關，蓮蓬頭掛上時物理壓下開關
+- 狀態：蓮蓬頭在掛架上 → 開關被壓下（ON）→ D2 = LOW
+- 狀態：蓮蓬頭被取下 → 開關彈起（OFF）→ D2 = HIGH
+- 觸發時機：偵測到 OFF→ON 的下降沿（蓮蓬頭剛掛回）→ 送 `HANG\n`
 
 ---
 
@@ -320,12 +364,19 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [x] 聲音效果疊加完成（ring modulation + Voicemeeter EQ + VoiceSettings 活潑參數）
 - [x] ElevenLabs 聲音確定（Bella premade，已批次測試所有免費可用聲音）
 - [x] test_voices.py：多聲音試聽比較工具（含 ring modulation 效果）
-- [ ] 瀏覽器 Web Speech API 介面設定與測試
 - [x] Arduino IDE 安裝 + U8g2 library（官網版 2.3.8，CH340 驅動 CH341SER.EXE）
 - [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
 - [x] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測（2026-05-19 完成）
+- [ ] **採購微動開關（Micro Switch）** — 掛架重置機制用
+- [ ] **Arduino 新增微動開關接線 + 燒錄 HANG\n 訊號邏輯**
+- [ ] **蓮蓬頭 Skill 文件撰寫（9 個章節，逐步填寫中）**
+- [ ] **升級 Gemini 為 multimodal 音訊輸入（取代 librosa + Web Speech API）**
+- [ ] **Python VAD 靜音切段邏輯實作（靜音 > 800ms 觸發斷句）**
+- [ ] **Python 加入每次對話的 instruction anchoring（每次 prompt 前附提醒句）**
+- [ ] **Python 加入對話記憶（conversation_history）+ 收到 HANG\n 時清除**
 - [ ] 展覽用 USB 麥克風（3.5mm TRRS 不相容，需更換）
-- [ ] 全系統整合測試（含 Arduino + Web Speech）
+- [ ] 全系統整合測試（含 Arduino 微動開關 + Gemini multimodal）
+- [ ] ~~瀏覽器 Web Speech API 介面設定與測試~~ → 由 Gemini multimodal 取代，暫不實作
 
 ## 技術備註
 - Gemini SDK 已從 `google-generativeai`（已停止維護）升級至 `google-genai`
@@ -348,4 +399,12 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - Windows Store 版 Arduino IDE 無法存取 COM port（沙盒限制），需用官網 .exe 安裝版
 - Arduino Nano clone 使用 CH340 晶片，需安裝 CH341SER.EXE 驅動；燒錄選 ATmega328P (Old Bootloader)
 
-*最後更新：2026-05-19（Arduino 燒錄完成、OLED + FSR 測試通過、聲音門檻調整）*
+### 新架構決策（2026-05-21）
+- **Gemini multimodal 音訊輸入**：音訊片段直接傳給 Gemini，不再先用 librosa 提取數值特徵再轉文字描述。Gemini 可直接辨識語音內容、歌聲、咳嗽、環境音等，理解品質大幅提升。
+- **VAD 靜音切段**：對話模式改用 Python RMS 靜音偵測（持續靜音 > 800ms）作為句尾判斷，取代 Chrome Web Speech API。靜音門檻沿用已校準值 `rms < 0.015`。
+- **微動開關重置機制**：蓮蓬頭掛回時觸發 Arduino D2，送 `HANG\n` 給 Python，清除 `conversation_history`。每位觀眾對話記憶在物理動作（掛回）時清除，記憶邊界由裝置實際使用狀態決定，不靠計時。
+- **Instruction anchoring**：每次呼叫 Gemini 前，在 user message 前自動附加原則提醒句，避免長對話後 Gemini 偏離個性設定。
+- **Skill 文件**（system prompt 重構）：現有簡短 SYSTEM_PROMPT 將擴充為 9 章節完整 skill 文件，包含身份核心、禁止項目、說話規則、情境分支、記憶規則、多樣化規則、語氣示範庫、特殊狀況、重置機制。逐步與作者共同填寫。
+- **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作，效果與 Gem 相同。
+
+*最後更新：2026-05-21（新增微動開關重置機制、Gemini multimodal 升級計畫、VAD 切段、Skill 文件架構）*
