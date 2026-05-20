@@ -166,6 +166,7 @@ def singing_comparison_hint(current_score: float) -> str | None:
 
 def build_memory_context(matched_memory: dict | None = None,
                          singing_hint: str | None = None) -> str:
+    import random
     parts = []
 
     if matched_memory:
@@ -178,7 +179,9 @@ def build_memory_context(matched_memory: dict | None = None,
         if feeling:
             parts.append(f"你當時的感受：{feeling}")
         if samples:
-            parts.append(f"你曾對這種聲音說過：{'、'.join(samples[:3])}")
+            # 隨機抽 3 筆，避免每次示範相同句子
+            picked = random.sample(samples, min(3, len(samples)))
+            parts.append(f"你過去曾有過的感受方向（僅供參考，今天說新的）：{'、'.join(picked)}")
 
     if singing_hint:
         parts.append(f"\n【唱歌比較】{singing_hint}。你可以偶爾說出比較的感受，例如「上一個比較好。」「好聽。」「這次不一樣。」等，但不必每次都比較。")
@@ -186,8 +189,7 @@ def build_memory_context(matched_memory: dict | None = None,
     log = load_session_log()
     recent = log[-MAX_SESSION_CTX:]
     if recent:
-        parts.append("\n你今天說過：")
-        for e in recent:
-            parts.append(f"- 聽到「{e['sound_desc']}」，你說：「{e['response']}」")
+        used = [e['response'] for e in recent]
+        parts.append(f"\n今天你已說過（不要重複這些說法）：{'、'.join(f'「{r}」' for r in used)}")
 
     return "\n".join(parts)
