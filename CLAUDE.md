@@ -167,7 +167,7 @@
 | 1.3吋 OLED I2C 128×64（SH1106） | 顯示文字 | ✅ 已有 |
 | FSR 壓力感測器 | 偵測握力 | ✅ 已有 |
 | 10kΩ 電阻 | FSR 分壓電路 | ✅ 已有 |
-| USB 麥克風 | 收音 | ⚠️ 3.5mm TRRS 麥克風無法正常收音，暫用筆電內建 Microphone Array |
+| TRRS 領夾麥克風（JGL-119H）+ TRRS 分接頭 | 收音 | ✅ 已確認正常收音 |
 | USB 有源喇叭 | 播出聲音 | ⚠️ 暫用電腦喇叭替代 |
 | USB 集線器 | 同時接多個 USB | ✅ 已有 |
 | 塑膠蓮蓬頭 | 主體外觀 | ✅ 已有 |
@@ -270,9 +270,8 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 ## 麥克風設定
 
 ### 目前狀態
-- **使用裝置**：筆電內建 Microphone Array (Realtek)
-- **原因**：3.5mm TRRS 外接麥克風（JGL-119H）無法正常收音，硬體不相容
-- **展覽建議**：改用 USB 麥克風，避免接孔相容問題
+- **使用裝置**：3.5mm TRRS 領夾式麥克風（JGL-119H），透過 TRRS 轉雙 TRS 分接頭接入筆電 combo 孔
+- 已確認可正常收音、錄音測試通過
 
 ### 麥克風校準數值（2026-05-18 測定）
 | 情況 | rms |
@@ -339,7 +338,7 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - melody 偵測條件：`(hr > 0.92 and zcr < 0.04) or (hr > 0.88 and zcr < 0.03 and rms > 0.025)`（說話 hr 約 0.86–0.88，不觸發）
 - 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
 - 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）
-- 3.5mm TRRS 麥克風（JGL-119H）與筆電不相容，暫用內建 Microphone Array
+- 麥克風：3.5mm TRRS 領夾式（JGL-119H）透過 TRRS 轉雙 TRS 分接頭接入筆電 combo 孔，收音正常
 - `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
 - **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
 - ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4, use_speaker_boost=False`
