@@ -270,7 +270,9 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 ## 麥克風設定
 
 ### 目前狀態
-- **使用裝置**：3.5mm TRRS 領夾式麥克風（JGL-119H），透過 TRRS 轉雙 TRS 分接頭接入筆電 combo 孔
+- **使用裝置**：3.5mm TRRS 領夾式麥克風（JGL-119H）
+- 筆電有**獨立耳機孔 + 獨立麥克風孔**（非 combo 孔），TRRS 直插無聲
+- 透過 **TRRS 轉雙 TRS 分接頭**（紅＝麥克風孔、綠＝耳機孔）才能正常收音
 - 已確認可正常收音、錄音測試通過
 
 ### 麥克風校準數值（2026-05-18 測定）
@@ -338,7 +340,7 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - melody 偵測條件：`(hr > 0.92 and zcr < 0.04) or (hr > 0.88 and zcr < 0.03 and rms > 0.025)`（說話 hr 約 0.86–0.88，不觸發）
 - 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
 - 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）
-- 麥克風：3.5mm TRRS 領夾式（JGL-119H）透過 TRRS 轉雙 TRS 分接頭接入筆電 combo 孔，收音正常
+- 麥克風：筆電為獨立耳機孔＋獨立麥克風孔（非 combo），TRRS 直插無聲；需透過 TRRS 轉雙 TRS 分接頭（紅接麥克風孔、綠接耳機孔）才正常收音
 - `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
 - **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
 - ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4, use_speaker_boost=False`
