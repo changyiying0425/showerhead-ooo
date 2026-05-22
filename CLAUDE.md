@@ -367,8 +367,8 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [x] Arduino IDE 安裝 + U8g2 library（官網版 2.3.8，CH340 驅動 CH341SER.EXE）
 - [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
 - [x] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測（2026-05-19 完成）
-- [ ] **採購微動開關（Micro Switch）** — 掛架重置機制用
-- [ ] **Arduino 新增微動開關接線 + 燒錄 HANG\n 訊號邏輯**
+- [x] **採購微動開關（Micro Switch）** — 掛架重置機制用
+- [x] **Arduino 新增微動開關接線 + 燒錄 HANG\n 訊號邏輯**（2026-05-22 測試通過）
 - [ ] **蓮蓬頭 Skill 文件撰寫（9 個章節，逐步填寫中）**
 - [ ] **升級 Gemini 為 multimodal 音訊輸入（取代 librosa + Web Speech API）**
 - [ ] **Python VAD 靜音切段邏輯實作（靜音 > 800ms 觸發斷句）**
