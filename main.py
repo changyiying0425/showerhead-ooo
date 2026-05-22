@@ -412,28 +412,35 @@ def ask_gemini(prompt: str, use_history: bool = False) -> str | None:
     else:
         contents = user_text
 
-    for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
-        try:
-            resp = gemini.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                ),
-            )
-            result = resp.text.strip()
-
-            if use_history:
-                conversation_history.append(
-                    {"role": "user", "parts": [{"text": user_text}]}
+    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+        for attempt in range(2):
+            try:
+                resp = gemini.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                    ),
                 )
-                conversation_history.append(
-                    {"role": "model", "parts": [{"text": result}]}
-                )
+                result = resp.text.strip()
 
-            return result
-        except Exception as e:
-            print(f"[Gemini] {model} 錯誤：{e}")
+                if use_history:
+                    conversation_history.append(
+                        {"role": "user", "parts": [{"text": user_text}]}
+                    )
+                    conversation_history.append(
+                        {"role": "model", "parts": [{"text": result}]}
+                    )
+
+                return result
+            except Exception as e:
+                err = str(e)
+                if "503" in err and attempt == 0:
+                    print(f"[Gemini] {model} 503，2 秒後重試...")
+                    time.sleep(2)
+                else:
+                    print(f"[Gemini] {model} 錯誤：{e}")
+                    break
     return None
 
 # ═══════════════════════════════════════════════════
@@ -481,18 +488,25 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
         except Exception as e:
             print(f"[Gemini 聽到] 辨識失敗：{e}")
 
-    for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
-        try:
-            resp = gemini.models.generate_content(
-                model=model,
-                contents=[{"role": "user", "parts": parts}],
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                ),
-            )
-            return resp.text.strip()
-        except Exception as e:
-            print(f"[Gemini Audio] {model} 錯誤：{e}")
+    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+        for attempt in range(2):   # 503 時自動重試一次
+            try:
+                resp = gemini.models.generate_content(
+                    model=model,
+                    contents=[{"role": "user", "parts": parts}],
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                    ),
+                )
+                return resp.text.strip()
+            except Exception as e:
+                err = str(e)
+                if "503" in err and attempt == 0:
+                    print(f"[Gemini Audio] {model} 503，2 秒後重試...")
+                    time.sleep(2)
+                else:
+                    print(f"[Gemini Audio] {model} 錯誤：{e}")
+                    break
     return None
 
 
