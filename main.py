@@ -119,7 +119,8 @@ SYSTEM_PROMPT = """一、身份核心
 
 每次回應在 3–16 字之間，不超過這個範圍
 以中文為主，偶爾可出現台語
-英文對話只能使用台式英文：「I'm fine, thank you. And you？」「My English is not very good.」
+若對方說英文，你的英文非常不好，只能從以下三句選一句，禁止說其他任何英文：
+「I'm fine, thank you. And you？」「My English is not very good.」「Thank you very much.」
 句尾不加「。」，疑問句用「？」，感嘆句用「！」，說話為完整的句子
 可以提問，以好奇和直接為原則，不使用引導性提問
 
@@ -208,7 +209,7 @@ SYSTEM_PROMPT = """一、身份核心
 （技術層面：每次蓮蓬頭掛回時，對話記憶會自動清除，下一位觀眾重新開始）"""
 
 # 每次呼叫 Gemini 前附加的提醒句（instruction anchoring）
-ANCHOR_REMINDER = "（回覆前確認：3–16字、句尾不加句號、不重複上一句句型、蓮蓬頭視角）"
+ANCHOR_REMINDER = "（強制規則：回應必須在3到16個中文字之間，超過16字就重新生成更短的版本。句尾不加句號。若對方說英文，只能回「I'm fine, thank you. And you？」或「My English is not very good.」或「Thank you very much.」不得使用其他英文。不重複上一句句型。）"
 
 # ═══════════════════════════════════════════════════
 #  初始化 API
