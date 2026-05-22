@@ -199,8 +199,8 @@ FSR HOLD → Python 開始錄音 + 即時監測 RMS
 | 1.3吋 OLED I2C 128×64（SH1106） | 顯示文字 | ✅ 已有 |
 | FSR 壓力感測器 | 偵測握力，切換對話模式 | ✅ 已有 |
 | 10kΩ 電阻 | FSR 分壓電路 | ✅ 已有 |
-| **微動開關（Micro Switch）** | **偵測蓮蓬頭掛回，觸發對話記憶重置** | ❌ **待採購** |
-| USB 麥克風 | 收音 | ⚠️ 3.5mm TRRS 麥克風無法正常收音，暫用筆電內建 Microphone Array |
+| 微動開關（Micro Switch） | 偵測蓮蓬頭掛回，觸發對話記憶重置 | ✅ 已採購並測試（2026-05-22） |
+| TRRS 領夾麥克風（JGL-119H）+ TRRS 轉雙 TRS 分接頭 | 收音 | ✅ 已確認正常收音 |
 | USB 有源喇叭 | 播出聲音 | ⚠️ 暫用電腦喇叭替代 |
 | USB 集線器 | 同時接多個 USB | ✅ 已有 |
 | 塑膠蓮蓬頭 | 主體外觀 | ✅ 已有 |
@@ -223,9 +223,9 @@ OLED SH1106 I2C（4 腳位 IIC 版本）：
   OLED SCK → A5 (SCL)
   OLED SDA → A4 (SDA)
 
-微動開關（重置機制，待實作）：
+微動開關（重置機制）：
   微動開關 COM → GND
-  微動開關 NO  → D2（數位腳位，使用 INPUT_PULLUP）
+  微動開關 NO  → D2（數位腳位，使用 INPUT_PULLUP，不需外接電阻）
   說明：蓮蓬頭掛回時按下開關 → D2 讀到 LOW → Arduino 送 HANG\n 給 Python
 
 Arduino Nano USB → 筆電（透過 USB 集線器）
@@ -237,6 +237,44 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - 狀態：蓮蓬頭在掛架上 → 開關被壓下（ON）→ D2 = LOW
 - 狀態：蓮蓬頭被取下 → 開關彈起（OFF）→ D2 = HIGH
 - 觸發時機：偵測到 OFF→ON 的下降沿（蓮蓬頭剛掛回）→ 送 `HANG\n`
+
+---
+
+## 延長線規劃（展場佈線，延長約 150cm）
+
+### 各線路方式
+
+| 線路 | 延長方式 | 額外元件 |
+|------|---------|---------|
+| Arduino USB → 筆電 | 買現成 USB 延長線（A公對A母） | — |
+| OLED SDA / SCL | 直接焊接延長導線 | **4.7kΩ 電阻 × 2**（見下） |
+| FSR 訊號線（A0） | 直接焊接延長導線 | — |
+| FSR 電源線（3.3V / GND） | 直接焊接延長導線 | — |
+| 微動開關（D2） | 直接焊接延長導線 | — |
+| 喇叭（3.5mm） | 公對母延長線 | — |
+| 麥克風 TRRS | TRRS 公對母延長線（4節）或兩條 TRS 分開延長 | — |
+
+### OLED I2C 上拉電阻（延長必要）
+延長超過 50cm 後，原本 Arduino 內建的上拉太弱，訊號邊緣糊掉會導致 OLED 無顯示或亂碼。
+
+```
+接法（焊在 Arduino 端或延長線中間點皆可）：
+
+SDA ─┬─ 4.7kΩ ─┐
+SCL ─┤          ├─ 3.3V
+     └─ 4.7kΩ ─┘
+
+即：SDA 與 3.3V 之間接一顆 4.7kΩ
+    SCL 與 3.3V 之間接一顆 4.7kΩ
+```
+
+### 注意事項
+- USB 延長線選有金屬遮蔽外皮的線材，展場電源環境複雜
+- Arduino USB 和麥克風 USB 分開走線，不要綁在一起
+- FSR 若出現誤觸發（展場電磁干擾），調高 `FSR_THRESHOLD`（現在 200，可試 250–300）
+- I2C 導線建議使用雙絞（SDA 與 GND 互絞、SCL 與 GND 互絞），進一步抗干擾
+- 焊接後用熱縮套管逐層包覆（先包各芯，再包整體）
+- 麥克風需 TRRS（4節）延長線；若找不到，可將分接頭固定在箱體端，從分接頭拉兩條普通 TRS 延長線到筆電
 
 ---
 
@@ -314,9 +352,10 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 ## 麥克風設定
 
 ### 目前狀態
-- **使用裝置**：筆電內建 Microphone Array (Realtek)
-- **原因**：3.5mm TRRS 外接麥克風（JGL-119H）無法正常收音，硬體不相容
-- **展覽建議**：改用 USB 麥克風，避免接孔相容問題
+- **使用裝置**：3.5mm TRRS 領夾麥克風（JGL-119H）
+- 筆電有**獨立耳機孔 + 獨立麥克風孔**（非 combo 孔），TRRS 直插無聲
+- 透過 **TRRS 轉雙 TRS 分接頭**（紅＝麥克風孔、綠＝耳機孔）正常收音
+- 已確認可正常收音、錄音測試通過
 
 ### 麥克風校準數值（2026-05-18 測定）
 | 情況 | rms |
@@ -390,7 +429,8 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - melody 偵測條件：`(hr > 0.92 and zcr < 0.04) or (hr > 0.88 and zcr < 0.03 and rms > 0.025)`（說話 hr 約 0.86–0.88，不觸發）
 - 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
 - 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）
-- 3.5mm TRRS 麥克風（JGL-119H）與筆電不相容，暫用內建 Microphone Array
+- 麥克風：筆電為獨立耳機孔＋獨立麥克風孔（非 combo），TRRS 直插無聲；需透過 TRRS 轉雙 TRS 分接頭（紅接麥克風孔、綠接耳機孔）正常收音
+- 微動開關：D2（INPUT_PULLUP），COM→GND、NO→D2，80ms 軟體去彈跳，下降沿送 HANG\n
 - `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
 - **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
 - ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4, use_speaker_boost=False`
@@ -407,4 +447,4 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - **Skill 文件**（system prompt 重構）：現有簡短 SYSTEM_PROMPT 將擴充為 9 章節完整 skill 文件，包含身份核心、禁止項目、說話規則、情境分支、記憶規則、多樣化規則、語氣示範庫、特殊狀況、重置機制。逐步與作者共同填寫。
 - **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作，效果與 Gem 相同。
 
-*最後更新：2026-05-21（新增微動開關重置機制、Gemini multimodal 升級計畫、VAD 切段、Skill 文件架構）*
+*最後更新：2026-05-22（微動開關測試通過、Python HANG 重置實作完成、麥克風接法修正、延長線規劃新增）*
