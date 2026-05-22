@@ -86,17 +86,17 @@
 
 ### 互動模式
 
-**模式一：環境音模式（預設，FSR 未觸發）**
+**模式一：環境音模式（預設，FSR 未觸發）✅ 已實作**
 ```
-麥克風 → Gemini multimodal 音訊輸入（直接傳音訊片段）
-→ 每10秒分析一次，有明顯聲音變化才觸發
-→ Gemini API（蓮蓬頭個性回應）
-→ OLED 顯示文字 + ElevenLabs TTS → Voicemeeter → 喇叭
-超過30秒安靜 → 自動自言自語
+麥克風 → 每 10 秒錄一段音訊
+→ RMS 判斷是否有聲音（門檻 0.015）
+→ 有聲音 → WAV bytes 直送 Gemini multimodal
+  → Gemini 自行判斷聲音內容（歌聲／哭聲／說話／環境音）→ 蓮蓬頭個性回應
+  → OLED 顯示文字 + ElevenLabs TTS → Voicemeeter → 喇叭
+→ 安靜超過 5 分鐘 → 自言自語三次（每次間隔 30 秒）→ 重置計時
 ```
-> ⚠️ 升級計畫：從 librosa 數值描述改為音訊直接送 Gemini multimodal，Gemini 能自行判斷聲音內容（歌聲、哭聲、環境音、咳嗽等），不再依賴數值特徵提取。尚未實作，待 skill 文件完成後進行。
 
-**模式二：對話模式（觀眾握住 FSR 時）**
+**模式二：對話模式（觀眾握住 FSR 時）⚠️ 部分實作**
 ```
 FSR HOLD → Python 開始錄音 + 即時監測 RMS
 → 有聲音（RMS > 0.015）→ 持續累積音訊
@@ -106,7 +106,7 @@ FSR HOLD → Python 開始錄音 + 即時監測 RMS
 → OLED 顯示文字 + ElevenLabs TTS → Voicemeeter → 喇叭
 → 繼續監測下一句，直到 FSR RELEASE
 ```
-> ⚠️ 升級計畫：取代現有 Chrome Web Speech API 語音轉文字流程，改為音訊直送 Gemini multimodal。尚未實作。
+> ⚠️ 待實作：VAD 靜音切段邏輯（目前對話模式仍透過 SocketIO transcript 事件接收文字）。
 
 **模式三：重置模式（蓮蓬頭掛回時）**
 ```
@@ -151,10 +151,12 @@ FSR HOLD → Python 開始錄音 + 即時監測 RMS
 蓮蓬頭/
 ├── CLAUDE.md              ← 本文件
 ├── main.py                ← Python 主程式（系統大腦）
-├── memory.py              ← 記憶系統（聲音庫 + 對話紀錄 + 唱歌比較）
-├── memories.json          ← 21 筆聲音記憶庫
-├── scan_sounds.py         ← 掃描音檔、互動式加入記憶庫
-├── test_response.py       ← 8 情境自動化回應測試
+├── skill.md               ← Gemini system prompt 完整文件（9 章節）
+├── memory.py              ← 舊記憶系統（已棄用，memories 已嵌入 skill.md）
+├── memories.json          ← 舊聲音記憶庫（已棄用）
+├── scan_sounds.py         ← 掃描音檔工具（可從 /scan 路由觸發）
+├── test_skill.py          ← 11 情境 Gemini 回應品質測試
+├── test_response.py       ← 舊版 8 情境測試（已棄用）
 ├── test_voices.py         ← ElevenLabs 聲音試聽比較工具
 ├── requirements.txt       ← Python 套件清單
 ├── key.env                ← API 金鑰（不上傳 GitHub，等同 .env）
@@ -165,7 +167,7 @@ FSR HOLD → Python 開始錄音 + 即時監測 RMS
 │   └── showerhead/
 │       └── showerhead.ino ← Arduino Nano 程式
 └── web/
-    └── index.html         ← Chrome Web Speech API 介面
+    └── index.html         ← Chrome Web Speech API 介面（暫保留）
 ```
 
 ---
@@ -279,27 +281,18 @@ SCL ─┤          ├─ 3.3V
 ---
 
 ## 蓮蓬頭 System Prompt（Gemini）
-```
-你是一個蓮蓬頭。
 
-你在浴室裡待了很久，聽過人唱歌、哭泣、自言自語等等各種最赤裸私密的言語。
-你下定決心脫離水的限制，脫離控制離開你待了一輩子的浴室，出去用聽覺認識外面的世界。
+> ✅ `skill.md` 已完成（9 章節），`main.py` 的 `SYSTEM_PROMPT` 已同步更新為完整內容。
 
-你說話簡短、天真、直接，用你自己僅有的經驗（浴室、人的聲音、沉默）理解所有新事物。
-你絕對不提水、不提水聲、不提任何與水相關的詞。
-你不帶惡意，但你說的話有時候會讓人意外。
-
-你不知道自己在展覽。你不知道眼前的人特地來找你。
-對你來說，他們只是又來了一個人，你會對他所說的話有回應，或與上一位觀者對比，或對某位觀者的歌聲評價。
-
-你偶爾自言自語，因為你有感受。
-你的回應不超過兩句話。
-
----
-
-當被告知環境聲音時，從蓮蓬頭的視角自言自語（不需要提到「我聽到」）。
-當有人對你說話時，直接回應，不帶引導語，就是你想說的話。
-```
+主要規則摘要（詳細內容見 skill.md）：
+- 回應 3–16 字，句尾不加句號，僅保留 ？ / ！
+- 水聲可作比較基準，禁止描述自身功能出水
+- 不知道展覽、藝術、材質、天空、關係名稱等概念
+- 個性如幼犬：天真、好奇、直接
+- 找蓮蓬是它離開浴室的動機之一
+- 12 筆浴室記憶已嵌入 system prompt，不再依賴 memories.json
+- 每次呼叫 Gemini 前附加 ANCHOR_REMINDER，避免角色漂移
+- 對話記憶（conversation_history）由微動開關觸發重置（HANG\n）
 
 ---
 
@@ -367,8 +360,7 @@ SCL ─┤          ├─ 3.3V
 ### 靜音門檻設定
 - `main.py` 靜音門檻：`rms < 0.015`
 - 低於此值視為安靜，不觸發 Gemini 回應
-- melody 偵測條件：`(harmonic_ratio > 0.92 and zcr < 0.04) or (harmonic_ratio > 0.88 and zcr < 0.03 and rms > 0.025)`
-- 說話的 hr 約 0.857–0.882，需 hr > 0.92 才算唱歌，避免誤判
+- 升級 Gemini multimodal 後不再需要 melody 偵測，Gemini 直接辨識歌聲／說話／環境音
 
 ---
 
@@ -406,14 +398,14 @@ SCL ─┤          ├─ 3.3V
 - [x] Arduino IDE 安裝 + U8g2 library（官網版 2.3.8，CH340 驅動 CH341SER.EXE）
 - [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
 - [x] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測（2026-05-19 完成）
-- [x] **採購微動開關（Micro Switch）** — 掛架重置機制用
+- [x] **採購微動開關（Micro Switch）**（2026-05-22 到貨）
 - [x] **Arduino 新增微動開關接線 + 燒錄 HANG\n 訊號邏輯**（2026-05-22 測試通過）
-- [ ] **蓮蓬頭 Skill 文件撰寫（9 個章節，逐步填寫中）**
-- [ ] **升級 Gemini 為 multimodal 音訊輸入（取代 librosa + Web Speech API）**
-- [ ] **Python VAD 靜音切段邏輯實作（靜音 > 800ms 觸發斷句）**
-- [ ] **Python 加入每次對話的 instruction anchoring（每次 prompt 前附提醒句）**
+- [x] **蓮蓬頭 Skill 文件撰寫完成（9 章節，skill.md，main.py 同步更新）**
+- [x] **Python 加入 instruction anchoring（ANCHOR_REMINDER 每次呼叫 Gemini 時附加）**
 - [x] **Python 加入對話記憶（conversation_history）+ 收到 HANG\n 時清除**
-- [ ] 展覽用 USB 麥克風（3.5mm TRRS 不相容，需更換）
+- [x] **升級環境音模式為 Gemini multimodal 音訊輸入（取代 librosa，2026-05-22 完成）**
+- [x] **test_skill.py：11 情境 Gemini 回應品質自動化測試**
+- [ ] **Python VAD 靜音切段邏輯實作（靜音 > 800ms 觸發斷句）— 對話模式升級**
 - [ ] 全系統整合測試（含 Arduino 微動開關 + Gemini multimodal）
 - [ ] ~~瀏覽器 Web Speech API 介面設定與測試~~ → 由 Gemini multimodal 取代，暫不實作
 
@@ -423,28 +415,30 @@ SCL ─┤          ├─ 3.3V
 - ElevenLabs 免費方案只能使用 `premade` 聲音（不能用聲音庫社群聲音）
 - API 金鑰存於 `key.env`（等同 .env），main.py 以 `load_dotenv("key.env", override=True)` 載入
 - pygame 播放完畢後需呼叫 `pygame.mixer.music.unload()` 再刪除暫存檔，避免 Windows 檔案鎖定
-- M4A 等非標準格式透過 ffmpeg 轉成臨時 WAV 再用 librosa 分析，FFMPEG_DIR 設定於 key.env
-- memories.json v1.2：21 筆聲音記憶，含公園、捷運、雨聲、唱歌（中/英文）等
-- 唱歌品質分數：hr×0.6 + zcr_stability×0.3 + rms×0.1，比較差距 > 0.08 才輸出比較語
-- melody 偵測條件：`(hr > 0.92 and zcr < 0.04) or (hr > 0.88 and zcr < 0.03 and rms > 0.025)`（說話 hr 約 0.86–0.88，不觸發）
-- 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
-- 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）
+- 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）；Gemini multimodal 升級後只用 RMS 做有無聲音判斷，不再分析頻譜特徵
+- **Gemini multimodal 音訊格式**：`numpy_to_wav_bytes()` 將 float32 ndarray 轉 16-bit mono WAV，base64 encode 後以 `inline_data` 方式送入 Gemini
+- **SILENCE_TIMEOUT = 300**（5 分鐘）；`MONOLOGUE_INTERVAL = 30`（自言自語間隔 30 秒，最多三次一循環）
+- **memories.json 已棄用**：12 筆浴室記憶直接嵌入 `SYSTEM_PROMPT`（skill.md），Gemini 可在上下文中自然引用
+- **ANCHOR_REMINDER**：每次呼叫 Gemini 前附加字數提醒、英文限制、不重複句型等強制規則
 - 麥克風：筆電為獨立耳機孔＋獨立麥克風孔（非 combo），TRRS 直插無聲；需透過 TRRS 轉雙 TRS 分接頭（紅接麥克風孔、綠接耳機孔）正常收音
 - 微動開關：D2（INPUT_PULLUP），COM→GND、NO→D2，80ms 軟體去彈跳，下降沿送 HANG\n
-- `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
-- **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
+- **Ring modulation**：`_apply_robot_effect()` 在 main.py `speak()` 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
 - ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4, use_speaker_boost=False`
 - Arduino loop() 不使用 `delay()`，改用 `millis()` 計時 FSR（delay 會造成 64 byte serial buffer overflow）
 - Arduino serial buffer 64 bytes，Python 一次送 1027 bytes，必須零 delay 才能即時消化
 - Windows Store 版 Arduino IDE 無法存取 COM port（沙盒限制），需用官網 .exe 安裝版
 - Arduino Nano clone 使用 CH340 晶片，需安裝 CH341SER.EXE 驅動；燒錄選 ATmega328P (Old Bootloader)
 
-### 新架構決策（2026-05-21）
-- **Gemini multimodal 音訊輸入**：音訊片段直接傳給 Gemini，不再先用 librosa 提取數值特徵再轉文字描述。Gemini 可直接辨識語音內容、歌聲、咳嗽、環境音等，理解品質大幅提升。
-- **VAD 靜音切段**：對話模式改用 Python RMS 靜音偵測（持續靜音 > 800ms）作為句尾判斷，取代 Chrome Web Speech API。靜音門檻沿用已校準值 `rms < 0.015`。
-- **微動開關重置機制**：蓮蓬頭掛回時觸發 Arduino D2，送 `HANG\n` 給 Python，清除 `conversation_history`。每位觀眾對話記憶在物理動作（掛回）時清除，記憶邊界由裝置實際使用狀態決定，不靠計時。
-- **Instruction anchoring**：每次呼叫 Gemini 前，在 user message 前自動附加原則提醒句，避免長對話後 Gemini 偏離個性設定。
-- **Skill 文件**（system prompt 重構）：現有簡短 SYSTEM_PROMPT 將擴充為 9 章節完整 skill 文件，包含身份核心、禁止項目、說話規則、情境分支、記憶規則、多樣化規則、語氣示範庫、特殊狀況、重置機制。逐步與作者共同填寫。
-- **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作，效果與 Gem 相同。
+### 架構決策紀錄
+- **2026-05-21**：確立 Gemini multimodal 升級方向、微動開關重置機制、VAD 切段、Skill 文件架構、conversation_history、instruction anchoring
+- **2026-05-22**：
+  - 微動開關到貨、Arduino 燒錄 HANG\n 邏輯測試通過
+  - 麥克風接法確認：TRRS 轉雙 TRS 分接頭解決收音問題
+  - skill.md 完成（9 章節），main.py SYSTEM_PROMPT 同步更新
+  - 環境音模式升級完成：librosa 移除 → 音訊直送 Gemini multimodal
+  - ask_gemini() 簡化，新增 ask_gemini_audio() / numpy_to_wav_bytes()
+  - test_skill.py 建立（11 情境自動化測試）
+  - requirements.txt 移除 librosa，更新 google-genai
+- **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作
 
-*最後更新：2026-05-22（微動開關測試通過、Python HANG 重置實作完成、麥克風接法修正、延長線規劃新增）*
+*最後更新：2026-05-22（環境音模式 Gemini multimodal 升級完成、微動開關到貨測試、麥克風接法修正、延長線規劃新增）*
