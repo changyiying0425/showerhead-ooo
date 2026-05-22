@@ -373,7 +373,7 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 - [ ] **升級 Gemini 為 multimodal 音訊輸入（取代 librosa + Web Speech API）**
 - [ ] **Python VAD 靜音切段邏輯實作（靜音 > 800ms 觸發斷句）**
 - [ ] **Python 加入每次對話的 instruction anchoring（每次 prompt 前附提醒句）**
-- [ ] **Python 加入對話記憶（conversation_history）+ 收到 HANG\n 時清除**
+- [x] **Python 加入對話記憶（conversation_history）+ 收到 HANG\n 時清除**
 - [ ] 展覽用 USB 麥克風（3.5mm TRRS 不相容，需更換）
 - [ ] 全系統整合測試（含 Arduino 微動開關 + Gemini multimodal）
 - [ ] ~~瀏覽器 Web Speech API 介面設定與測試~~ → 由 Gemini multimodal 取代，暫不實作
