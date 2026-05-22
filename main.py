@@ -412,7 +412,7 @@ def ask_gemini(prompt: str, use_history: bool = False) -> str | None:
     else:
         contents = user_text
 
-    for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite-preview-06-17"]:
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
         try:
             resp = gemini.models.generate_content(
                 model=model,
@@ -481,7 +481,7 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
         except Exception as e:
             print(f"[Gemini 聽到] 辨識失敗：{e}")
 
-    for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite-preview-06-17"]:
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
         try:
             resp = gemini.models.generate_content(
                 model=model,
