@@ -11,13 +11,15 @@ Object-Oriented Ontology 互動裝置
 
 import os
 import sys
+import io
 import time
+import wave
+import base64
 import threading
 import tempfile
 
 import numpy as np
 import sounddevice as sd
-import librosa
 import serial
 import pygame
 from PIL import Image, ImageDraw, ImageFont
@@ -27,9 +29,6 @@ from elevenlabs.client import ElevenLabs
 from flask import Flask, render_template, jsonify
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
-from memory import (build_memory_context, save_session_entry, match_sound,
-                    score_singing, singing_comparison_hint)
-from scan_sounds import scan as scan_audio_folder
 
 load_dotenv()
 load_dotenv("key.env", override=True)  # 支援 key.env 命名
@@ -46,8 +45,9 @@ if _ffmpeg_dir and _ffmpeg_dir not in os.environ.get("PATH", ""):
 SERIAL_PORT      = os.getenv("SERIAL_PORT", "COM3")
 BAUD_RATE        = 115200
 SAMPLE_RATE      = 44100
-AMBIENT_SECONDS  = 10     # 每幾秒分析一次環境音
-SILENCE_TIMEOUT  = 30     # 超過幾秒無聲 → 自動自言自語
+AMBIENT_SECONDS     = 10    # 每幾秒分析一次環境音
+SILENCE_TIMEOUT     = 300   # 超過幾秒無聲 → 開始自言自語（5 分鐘）
+MONOLOGUE_INTERVAL  = 30    # 安靜時自言自語之間的間隔（秒）
 ELEVENLABS_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
 FONT_PATH        = os.getenv("FONT_PATH", r"C:\Windows\Fonts\msjh.ttc")  # 微軟正黑體
 
@@ -233,11 +233,13 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 #  全域狀態
 # ═══════════════════════════════════════════════════
 
-mode                 = "ambient"   # "ambient" | "dialogue"
-last_sound_time      = time.time()
-arduino              = None
-response_lock        = threading.Lock()
-conversation_history = []          # 對話記憶，收到 HANG\n 時清除
+mode                    = "ambient"   # "ambient" | "dialogue"
+last_sound_time         = time.time()
+arduino                 = None
+response_lock           = threading.Lock()
+conversation_history    = []          # 對話記憶，收到 HANG\n 時清除
+silence_monologue_count = 0           # 本次靜音週期已說幾次自言自語
+last_monologue_time     = 0.0         # 上一次自言自語的時間
 
 # ═══════════════════════════════════════════════════
 #  OLED 點陣圖產生（PIL → U8g2 頁格式）
@@ -395,19 +397,13 @@ def respond(text: str):
 #  Gemini API
 # ═══════════════════════════════════════════════════
 
-def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場",
-               matched_memory: dict | None = None,
-               singing_hint: str | None = None,
-               singing_quality: float | None = None,
-               use_history: bool = False) -> str | None:
+def ask_gemini(prompt: str, use_history: bool = False) -> str | None:
+    """文字 prompt → Gemini，可選帶入對話歷史。"""
     global conversation_history
 
-    # 組合 user 訊息（附加 instruction anchoring）
-    memory_ctx = build_memory_context(matched_memory, singing_hint)
-    user_text  = f"{ANCHOR_REMINDER}\n{memory_ctx}\n\n{prompt}" if memory_ctx \
-                 else f"{ANCHOR_REMINDER}\n{prompt}"
+    user_text = f"{ANCHOR_REMINDER}\n{prompt}"
 
-    # 建構 contents（對話模式帶入歷史記憶，環境音模式單次呼叫）
+    # 對話模式帶入歷史，環境音模式單次呼叫
     if use_history and conversation_history:
         contents = conversation_history + [
             {"role": "user", "parts": [{"text": user_text}]}
@@ -426,7 +422,6 @@ def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場",
             )
             result = resp.text.strip()
 
-            # 對話模式：更新對話記憶
             if use_history:
                 conversation_history.append(
                     {"role": "user", "parts": [{"text": user_text}]}
@@ -435,67 +430,54 @@ def ask_gemini(prompt: str, sound_desc: str = "", context: str = "展場",
                     {"role": "model", "parts": [{"text": result}]}
                 )
 
-            if sound_desc:
-                matched_id = matched_memory.get("id") if matched_memory else None
-                save_session_entry(context, sound_desc, matched_id, result, singing_quality)
             return result
         except Exception as e:
             print(f"[Gemini] {model} 錯誤：{e}")
     return None
 
 # ═══════════════════════════════════════════════════
-#  環境音分析（librosa）
+#  Gemini Multimodal 音訊輸入
 # ═══════════════════════════════════════════════════
 
-def describe_audio(audio: np.ndarray) -> tuple[str | None, dict]:
-    """
-    分析音頻，回傳 (描述文字, 聲音特徵字典)。
-    太安靜則描述為 None。
-    """
-    rms = float(np.sqrt(np.mean(audio ** 2)))
-    features: dict = {"rms": rms}
+def numpy_to_wav_bytes(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> bytes:
+    """將 numpy float32 單聲道陣列轉成 WAV bytes。"""
+    audio_int16 = (audio * 32767).clip(-32768, 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)          # 16-bit
+        wf.setframerate(sample_rate)
+        wf.writeframes(audio_int16.tobytes())
+    return buf.getvalue()
 
-    if rms < 0.015:
-        return None, features
 
-    af = audio.astype(np.float32)
+def ask_gemini_audio(audio: np.ndarray) -> str | None:
+    """直接將音訊送 Gemini multimodal，讓它自行判斷聲音內容並回應。"""
     try:
-        centroid       = float(librosa.feature.spectral_centroid(y=af, sr=SAMPLE_RATE).mean())
-        zcr            = float(librosa.feature.zero_crossing_rate(af).mean())
-        stft           = np.abs(librosa.stft(af))
-        freqs          = librosa.fft_frequencies(sr=SAMPLE_RATE)
-        total          = np.sum(stft) + 1e-10
-        freq_high      = float(np.sum(stft[freqs >= 2000]) / total)
-        freq_mid       = float(np.sum(stft[(freqs >= 300) & (freqs < 2000)]) / total)
-        harmonic       = librosa.effects.harmonic(af)
-        harmonic_ratio = float(np.mean(harmonic ** 2)) / (float(np.mean(af ** 2)) + 1e-10)
-        # 唱歌：harmonic_ratio 高 + ZCR 低（音符持續、穩定）
-        # 說話：harmonic_ratio 中 + ZCR 較高（音高變化快）
-        has_melody = (harmonic_ratio > 0.92 and zcr < 0.04) or \
-                     (harmonic_ratio > 0.88 and zcr < 0.03 and rms > 0.025)
-    except Exception:
-        centroid, zcr, freq_high, freq_mid, harmonic_ratio, has_melody = (
-            2000.0, 0.08, 0.5, 0.3, 0.0, False
-        )
+        wav_bytes = numpy_to_wav_bytes(audio)
+        audio_b64 = base64.b64encode(wav_bytes).decode()
+    except Exception as e:
+        print(f"[Gemini Audio] 音訊轉換失敗：{e}")
+        return None
 
-    features.update({
-        "centroid": centroid, "zcr": zcr,
-        "freq_high_ratio": freq_high, "freq_mid_ratio": freq_mid,
-        "harmonic_ratio": harmonic_ratio, "has_melody": has_melody,
-    })
+    parts = [
+        {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}},
+        {"text": ANCHOR_REMINDER},
+    ]
 
-    vol  = "很大聲" if rms > 0.12 else ("普通" if rms > 0.03 else "很輕")
-    if has_melody:
-        kind = "有人在唱歌或有音樂，有旋律"
-    elif zcr > 0.18:
-        kind = "有說話聲或吵雜的聲音"
-    elif zcr > 0.12:
-        kind = "有人在說話"
-    else:
-        kind = "有聲音，不像人聲"
-    pitch = "尖銳的" if centroid > 3500 else ("低沉的" if centroid < 1500 else "中等音調的")
-
-    return f"{kind}，{vol}，{pitch}", features
+    for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite-preview-06-17"]:
+        try:
+            resp = gemini.models.generate_content(
+                model=model,
+                contents=[{"role": "user", "parts": parts}],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                ),
+            )
+            return resp.text.strip()
+        except Exception as e:
+            print(f"[Gemini Audio] {model} 錯誤：{e}")
+    return None
 
 
 # ═══════════════════════════════════════════════════
@@ -503,8 +485,7 @@ def describe_audio(audio: np.ndarray) -> tuple[str | None, dict]:
 # ═══════════════════════════════════════════════════
 
 def ambient_loop():
-    global mode, last_sound_time
-    prev_desc = None
+    global mode, last_sound_time, silence_monologue_count, last_monologue_time
 
     while True:
         if mode != "ambient":
@@ -524,56 +505,44 @@ def ambient_loop():
         if mode != "ambient":
             continue
 
-        desc, features = describe_audio(audio.flatten())
-        rms_val = features.get("rms", 0)
-        zcr_val = features.get("zcr", 0)
-        hr_val  = features.get("harmonic_ratio", 0)
-        print(f"[偵測] rms={rms_val:.4f}  zcr={zcr_val:.3f}  hr={hr_val:.3f}  {'有聲音' if desc else '安靜（rms<0.015）'}  melody={features.get('has_melody', False)}")
+        audio_flat = audio.flatten()
+        rms = float(np.sqrt(np.mean(audio_flat ** 2)))
+        print(f"[偵測] rms={rms:.4f}  {'有聲音' if rms >= 0.015 else '安靜'}")
 
-        if desc:
+        if rms >= 0.015:
+            # 有聲音：直接送 Gemini multimodal
             last_sound_time = time.time()
-            is_singing = features.get("has_melody", False)
-            if desc != prev_desc or is_singing:
-                matched = match_sound(
-                    rms            = features.get("rms", 0),
-                    centroid       = features.get("centroid", 2000),
-                    zcr            = features.get("zcr", 0.08),
-                    freq_high_ratio= features.get("freq_high_ratio", 0.5),
-                    has_melody     = features.get("has_melody", False),
-                )
-                if matched:
-                    print(f"[記憶匹配] {matched['id']}")
+            silence_monologue_count = 0   # 重置安靜計數
+            ans = ask_gemini_audio(audio_flat)
+            if ans:
+                respond(ans)
 
-                # 唱歌品質判斷
-                s_quality = None
-                s_hint    = None
-                if features.get("has_melody") and matched and "唱歌" in matched.get("id", ""):
-                    s_quality = score_singing(
-                        features.get("harmonic_ratio", 0),
-                        features.get("zcr", 0.1),
-                        features.get("rms", 0),
-                    )
-                    s_hint = singing_comparison_hint(s_quality)
-                    if s_hint:
-                        print(f"[唱歌比較] {s_hint}")
-
-                ans = ask_gemini(
-                    f"你現在感受到：{desc}。",
-                    sound_desc=desc,
-                    matched_memory=matched,
-                    singing_hint=s_hint,
-                    singing_quality=s_quality,
-                )
-                if ans:
-                    respond(ans)
-                prev_desc = desc
         else:
-            if time.time() - last_sound_time > SILENCE_TIMEOUT:
-                ans = ask_gemini("四周很安靜，好一陣子了。說一句自言自語。", sound_desc="安靜")
+            # 安靜：5 分鐘後開始自言自語，共三次，每次間隔 30 秒
+            now = time.time()
+            elapsed_since_sound = now - last_sound_time
+
+            if silence_monologue_count == 0 and elapsed_since_sound > SILENCE_TIMEOUT:
+                # 第一次：安靜滿 5 分鐘
+                ans = ask_gemini("四周很安靜，好一陣子了。說一句自言自語。")
                 if ans:
                     respond(ans)
+                silence_monologue_count = 1
+                last_monologue_time = time.time()
+
+            elif 0 < silence_monologue_count < 3:
+                # 第二、三次：距上次滿 30 秒
+                if now - last_monologue_time > MONOLOGUE_INTERVAL:
+                    ans = ask_gemini("四周很安靜，好一陣子了。說一句自言自語。")
+                    if ans:
+                        respond(ans)
+                    silence_monologue_count += 1
+                    last_monologue_time = time.time()
+
+            elif silence_monologue_count >= 3:
+                # 三次完畢，重置並等待下一個 5 分鐘靜音週期
+                silence_monologue_count = 0
                 last_sound_time = time.time()
-            prev_desc = None
 
 
 # ═══════════════════════════════════════════════════
