@@ -121,21 +121,24 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 |------|------|
 | 微動開關 | 偵測蓮蓬頭是否被取下或掛回，觸發重置 |
 | FSR 壓力感測器 | 偵測觀眾握住蓮蓬頭，切換對話模式 |
-| Arduino Nano | 讀取微動開關 + FSR、驅動 OLED、傳訊號給 Python |
+| Arduino Nano | 讀取微動開關 + FSR、驅動兩顆 OLED、傳訊號給 Python |
 | 麥克風 | 收環境音及觀眾說話聲音 |
 | Python（main.py） | 整個系統的大腦，串聯所有服務，管理對話記憶 |
 | VAD（RMS 靜音偵測） | 對話模式中偵測句尾（靜音 > 800ms），切出音訊片段；PortAudio InputStream 統一收音 |
 | Gemini multimodal API | 直接分析音訊內容，產生蓮蓬頭個性回應（取代 librosa + Web Speech） |
 | ElevenLabs | 文字轉語音 |
 | Voicemeeter Banana | 所有播出聲音自動加悶聲混響 |
-| OLED 螢幕 | 顯示文字，觀眾讀懂用 |
+| OLED 1（0x3C） | 顯示蓮蓬頭回應文字，觀眾讀懂用 |
+| OLED 2（0x3D） | 顯示即時音訊電平波形（每 0.5 秒更新） |
+| `/viz` 網頁 | 同步顯示音訊波形 + 模式狀態，可外接螢幕全螢幕 |
 | USB 喇叭 | 播出處理後的聲音 |
 | ~~librosa~~ | ~~分析環境音特徵~~ → 升級後由 Gemini multimodal 取代 |
 | ~~Chrome Web Speech API~~ | ~~語音轉文字~~ → 升級後由 Gemini multimodal 取代 |
 
 ### Serial 通訊協定
 - Arduino → Python：`HOLD\n` / `RELEASE\n` / `HANG\n` / `BMAP_OK\n` / `BMAP_TIMEOUT:{n}\n`
-- Python → Arduino：`[0xFF 0xFE 0xFD]` + 1024 bytes 點陣圖（SH1106 U8g2 格式）
+- Python → Arduino（OLED 1 文字）：`[0xFF 0xFE 0xFD]` + 1024 bytes 點陣圖
+- Python → Arduino（OLED 2 波形）：`[0xFF 0xFE 0xFC]` + 1024 bytes 點陣圖
 
 | 訊號 | 觸發條件 | Python 動作 |
 |------|----------|-------------|
@@ -166,7 +169,8 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 │   └── showerhead/
 │       └── showerhead.ino ← Arduino Nano 程式
 └── web/
-    └── index.html         ← Chrome Web Speech API 介面
+    ├── index.html         ← Chrome Web Speech API 介面（已停用，保留備用）
+    └── viz.html           ← 即時音訊波形視覺化（localhost:5000/viz，可外接螢幕）
 ```
 
 ---
@@ -196,8 +200,9 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 ## 硬體採購清單
 | 元件 | 用途 | 狀態 |
 |------|------|------|
-| Arduino Nano | 讀取 FSR + 微動開關、驅動 OLED | ✅ 已有 |
-| 1.3吋 OLED I2C 128×64（SH1106） | 顯示文字 | ✅ 已有 |
+| Arduino Nano | 讀取 FSR + 微動開關、驅動兩顆 OLED | ✅ 已有 |
+| 1.3吋 OLED I2C 128×64（SH1106）× 1 | 顯示文字回應（I2C 0x3C） | ✅ 已有 |
+| 1.3吋 OLED I2C 128×64（SH1106）× 2 | 顯示音訊波形（I2C 0x3D，SA0 接 VCC） | ⚠️ 待採購/接線 |
 | FSR 壓力感測器 | 偵測握力，切換對話模式 | ✅ 已有 |
 | 10kΩ 電阻 | FSR 分壓電路 | ✅ 已有 |
 | 微動開關（Micro Switch） | 偵測蓮蓬頭掛回，觸發對話記憶重置 | ✅ 已採購並測試（2026-05-22） |
@@ -514,13 +519,19 @@ SCL ─┤          ├─ 3.3V
 - [x] **Python 加入每次對話的 instruction anchoring** — `ANCHOR_REMINDER` 已實作
 - [x] **Python 加入對話記憶（conversation_history）+ 收到 HANG\n 時清除**
 - [x] **Python VAD 靜音切段邏輯實作（對話模式，靜音 > 800ms 觸發斷句）** — PortAudio InputStream + Queue 統一收音，transcribe_audio() 轉錄，ask_gemini() 帶歷史回應（2026-05-24）
+- [x] **Gemini thinking 模式關閉（thinking_budget=0）** — 避免 THOUGHT 推理內容混入回應輸出（2026-05-24）
+- [x] **音訊波形視覺化網頁（/viz）** — Flask + SocketIO 推送即時 RMS，藍色=環境音 / 橘色=對話，可外接螢幕（2026-05-24）
+- [x] **OLED 2 波形顯示支援（程式碼完成）** — header 0xFC、rms_to_oled_bytes()、send_to_oled2()、audio_loop 每 0.5 秒更新；oled_send_lock 防衝突（2026-05-24）
+- [x] **Arduino 支援雙 OLED（程式碼完成）** — receiveBitmapToOled() 共用函數，header 0xFD→OLED1、0xFC→OLED2（2026-05-24）
+- [ ] **OLED 2 硬體接線** — 採購第二顆 SH1106，SA0 接 VCC（→ I2C 0x3D），SDA/SCL 並聯，重新燒錄 Arduino
 - [ ] 展覽用喇叭（目前暫用電腦喇叭）
-- [ ] 全系統整合測試（含 Arduino 微動開關 + 展場完整佈線）
+- [ ] 全系統整合測試（含 Arduino 微動開關 + OLED 2 + 展場完整佈線）
 - [ ] ~~瀏覽器 Web Speech API 介面設定與測試~~ → 對話模式升級後由 Gemini multimodal 取代
 
 ## 技術備註
 - Gemini SDK 已從 `google-generativeai`（已停止維護）升級至 `google-genai`
-- 使用模型：`gemini-2.5-flash`，fallback：`gemini-2.5-flash-lite-preview-06-17`（gemini-2.0/1.5 已 404）
+- 使用模型：`gemini-2.5-flash`，fallback：`gemini-1.5-flash`（gemini-2.0-flash / gemini-2.5-flash-lite-preview 已 404 或停止支援）
+- **thinking_budget=0**：gemini-2.5-flash 為思考模型，不加此設定會把推理過程（THOUGHT）混入回應。所有 generate_content 呼叫均加入 `ThinkingConfig(thinking_budget=0)` 關閉推理輸出
 - ElevenLabs 免費方案只能使用 `premade` 聲音（不能用聲音庫社群聲音）
 - API 金鑰存於 `key.env`（等同 .env），main.py 以 `load_dotenv("key.env", override=True)` 載入
 - pygame 播放完畢後需呼叫 `pygame.mixer.music.unload()` 再刪除暫存檔，避免 Windows 檔案鎖定
@@ -548,4 +559,4 @@ SCL ─┤          ├─ 3.3V
 - **Skill 文件**（system prompt 重構）：現有簡短 SYSTEM_PROMPT 將擴充為 9 章節完整 skill 文件，包含身份核心、禁止項目、說話規則、情境分支、記憶規則、多樣化規則、語氣示範庫、特殊狀況、重置機制。逐步與作者共同填寫。
 - **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作，效果與 Gem 相同。
 
-*最後更新：2026-05-24（Task C 完成：VAD 對話模式，PortAudio InputStream 統一收音，取代 Chrome Web Speech API）*
+*最後更新：2026-05-24（新增：/viz 波形視覺化網頁、OLED 2 波形顯示程式、thinking_budget=0 修正，CLAUDE.md 全面同步）*
