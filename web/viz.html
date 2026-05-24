@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>蓮蓬頭 — 音訊視覺化</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #ccc;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 1.2rem;
+    }
+
+    #mode-label {
+      font-size: 1.1rem;
+      letter-spacing: 0.15em;
+      transition: color 0.3s;
+    }
+
+    #canvas-wrap {
+      position: relative;
+    }
+
+    canvas {
+      display: block;
+      border-radius: 6px;
+    }
+
+    /* 門檻標籤 */
+    #thresh-label {
+      position: absolute;
+      right: 8px;
+      font-size: 0.65rem;
+      color: #555;
+      pointer-events: none;
+    }
+
+    #status {
+      font-size: 0.75rem;
+      color: #444;
+    }
+
+    /* 目前 RMS 數值 */
+    #rms-value {
+      font-size: 0.85rem;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div id="mode-label">連線中…</div>
+  <div id="canvas-wrap">
+    <canvas id="waveform" width="700" height="220"></canvas>
+    <div id="thresh-label" style="top:0">rms 0.015</div>
+  </div>
+  <div id="rms-value">rms —</div>
+  <div id="status">等待連線</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <script>
+    const canvas  = document.getElementById('waveform');
+    const ctx     = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    const HISTORY   = 140;    // 140 bars ≈ 14 秒歷史
+    const THRESHOLD = 0.015;  // 靜音門檻（與 main.py 一致）
+    const SCALE     = 5.5;    // RMS 放大倍數（讓波形更明顯）
+
+    let history     = new Array(HISTORY).fill(0);
+    let currentMode = 'ambient';
+    let latestRms   = 0;
+
+    // ── 顏色主題 ──
+    const THEME = {
+      ambient:  { active: '#42b8ff', dim: '#0a1f3d', label: '環境音模式', labelColor: '#42b8ff' },
+      dialogue: { active: '#ff8c42', dim: '#3d1500', label: '對話模式（握住中）', labelColor: '#ff8c42' },
+    };
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+
+      // 背景
+      ctx.fillStyle = '#0d0d0d';
+      ctx.fillRect(0, 0, W, H);
+
+      const theme  = THEME[currentMode] || THEME.ambient;
+      const barW   = W / HISTORY;
+
+      // 門檻線 y 座標
+      const threshH = Math.min(THRESHOLD * H * SCALE, H);
+      const threshY = H - threshH;
+
+      // 波形條
+      history.forEach((rms, i) => {
+        const barH   = Math.min(rms * H * SCALE, H);
+        const x      = i * barW;
+        const y      = H - barH;
+        const active = rms >= THRESHOLD;
+
+        ctx.fillStyle = active ? theme.active : theme.dim;
+        ctx.fillRect(x + 1, y, barW - 2, barH);
+      });
+
+      // 門檻虛線（疊在波形上）
+      ctx.strokeStyle = '#444';
+      ctx.lineWidth   = 1;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(0, threshY);
+      ctx.lineTo(W, threshY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 門檻標籤位置更新
+      document.getElementById('thresh-label').style.top = (threshY - 16) + 'px';
+    }
+
+    function loop() {
+      draw();
+      requestAnimationFrame(loop);
+    }
+    loop();
+
+    // ── SocketIO ──
+    const socket = io();
+
+    socket.on('connect', () => {
+      document.getElementById('status').textContent = '已連線';
+    });
+
+    socket.on('disconnect', () => {
+      document.getElementById('status').textContent = '已斷線';
+      document.getElementById('mode-label').textContent = '已斷線';
+      document.getElementById('mode-label').style.color = '#666';
+    });
+
+    socket.on('audio_level', (data) => {
+      const rms  = data.rms  ?? 0;
+      const mode = data.mode ?? 'ambient';
+
+      history.push(rms);
+      if (history.length > HISTORY) history.shift();
+
+      latestRms   = rms;
+      currentMode = mode;
+
+      const theme = THEME[mode] || THEME.ambient;
+      document.getElementById('mode-label').textContent  = theme.label;
+      document.getElementById('mode-label').style.color  = theme.labelColor;
+      document.getElementById('rms-value').textContent   =
+        `rms ${rms.toFixed(4)}  ${rms >= 0.015 ? '● 有聲音' : '○ 安靜'}`;
+    });
+  </script>
+</body>
+</html>

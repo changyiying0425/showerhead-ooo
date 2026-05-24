@@ -426,6 +426,7 @@ def ask_gemini(prompt: str, use_history: bool = False) -> str | None:
                     contents=contents,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
                 result = resp.text.strip()
@@ -502,6 +503,7 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
                     contents=[{"role": "user", "parts": parts}],
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
                 return resp.text.strip()
@@ -630,6 +632,16 @@ def audio_loop():
                 continue
 
             current_mode = mode   # 快照，避免執行緒競爭
+
+            # 每個 chunk 都計算即時 RMS，推送給視覺化頁面
+            chunk_rms = float(np.sqrt(np.mean(chunk ** 2)))
+            try:
+                socketio.emit("audio_level", {
+                    "rms": round(chunk_rms, 4),
+                    "mode": current_mode,
+                })
+            except Exception:
+                pass   # 無客戶端連線時忽略
 
             # ────────── 偵測模式切換 ──────────
             if current_mode != prev_mode:
@@ -807,6 +819,12 @@ def _reset_conversation():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/viz")
+def viz():
+    """音訊波形視覺化頁面（開發測試用，展覽時可外接螢幕顯示）。"""
+    return render_template("viz.html")
 
 
 @app.route("/scan")
