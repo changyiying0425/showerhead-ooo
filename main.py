@@ -334,29 +334,55 @@ def send_to_oled(text: str):
         print("[OLED] 未連線，跳過傳送")
 
 
-def rms_to_oled_bytes(rms_history: list) -> bytearray:
-    """將 RMS 歷史清單轉成波形點陣圖，送到 OLED 2。"""
-    img  = Image.new("1", (128, 64), 0)
-    draw = ImageDraw.Draw(img)
+def rms_to_oled_bytes(rms_history: list,
+                      state: str = "waiting",
+                      mode: str = "ambient") -> bytearray:
+    """
+    根據狀態與模式，產生對應的 OLED2 視覺圖樣：
 
-    SCALE = 4.0   # RMS 放大倍數（讓波形在螢幕上更明顯）
+    - speaking（說話中）   → 黑底 + 七條漸寬橫線（喇叭放射圖案）
+    - dialogue（對話模式） → 白底 + 黑色 bar chart（反色，視覺上明顯變亮）
+    - ambient（環境音）    → 黑底 + 白色 bar chart（原有波形）
+    """
+    SCALE    = 4.0
+    THRESH_Y = max(0, 63 - int(0.015 * 64 * SCALE))
 
-    # 取最後 128 筆，每筆畫一個 bar
-    data  = rms_history[-128:]
-    n     = len(data)
-    bar_w = max(1, 128 // n) if n else 1
+    if state == "speaking":
+        # ── 說話中：七條漸寬橫線，菱形放射，傳達「在說話」 ──
+        img  = Image.new("1", (128, 64), 0)
+        draw = ImageDraw.Draw(img)
+        cx   = 64
+        # (y座標, 線段半寬)；越靠近中心越寬
+        bands = [(8, 10), (17, 25), (26, 45), (32, 60),
+                 (38, 45), (47, 25), (56, 10)]
+        for y, hw in bands:
+            draw.line([(cx - hw, y), (cx + hw, y)], fill=1)
+        # 中心實心圓點
+        draw.ellipse([cx - 3, 29, cx + 3, 35], fill=1)
 
-    for i, rms in enumerate(data):
-        bar_h = min(int(rms * 64 * SCALE), 62)
-        if bar_h == 0 and rms > 0:
-            bar_h = 1
-        x0 = i * bar_w
-        x1 = min(x0 + bar_w - 1, 127)
-        draw.rectangle([x0, 63 - bar_h, x1, 63], fill=1)
+    else:
+        # ── 波形 bar chart；對話模式反色 ──
+        bg_color  = 1 if mode == "dialogue" else 0
+        bar_color = 0 if mode == "dialogue" else 1
+        thr_color = 0 if mode == "dialogue" else 1
 
-    # 門檻線（rms 0.015）
-    thresh_y = max(0, 63 - int(0.015 * 64 * SCALE))
-    draw.line([(0, thresh_y), (127, thresh_y)], fill=1)
+        img  = Image.new("1", (128, 64), bg_color)
+        draw = ImageDraw.Draw(img)
+
+        data  = rms_history[-128:]
+        n     = len(data)
+        bar_w = max(1, 128 // n) if n else 1
+
+        for i, rms in enumerate(data):
+            bar_h = min(int(rms * 64 * SCALE), 62)
+            if bar_h == 0 and rms > 0:
+                bar_h = 1
+            x0 = i * bar_w
+            x1 = min(x0 + bar_w - 1, 127)
+            draw.rectangle([x0, 63 - bar_h, x1, 63], fill=bar_color)
+
+        # 門檻線
+        draw.line([(0, THRESH_Y), (127, THRESH_Y)], fill=thr_color)
 
     pixels = np.array(img)
     buf = bytearray(1024)
@@ -795,52 +821,55 @@ def audio_loop():
 
             current_mode = mode   # 快照，避免執行緒競爭
 
-            # 每個 chunk 計算 RMS；每 VIZ_EMIT_EVERY 個 chunk emit 一次（降低 lag）
+            # ── 計算當前顯示狀態（viz + OLED2 共用）──
             chunk_rms = float(np.sqrt(np.mean(chunk ** 2)))
+            if is_speaking:
+                display_state = "speaking"
+                viz_progress  = 0
+            elif current_mode == "ambient":
+                if ambient_processing:
+                    display_state = "processing"
+                    viz_progress  = 100
+                else:
+                    display_state = "accumulating"
+                    viz_progress  = int(len(ambient_chunks) / max(AMBIENT_TARGET, 1) * 100)
+            elif dialogue_processing:
+                display_state = "processing"
+                viz_progress  = 100
+            elif vad_in_speech:
+                display_state = "speech"
+                viz_progress  = 100
+            else:
+                display_state = "waiting"
+                viz_progress  = 0
+
+            # ── viz.html：每 VIZ_EMIT_EVERY 個 chunk emit 一次 ──
             viz_chunk_count += 1
             if viz_chunk_count >= VIZ_EMIT_EVERY:
                 viz_chunk_count = 0
-                # state / progress 供 viz.html 顯示收音狀態
-                if is_speaking:
-                    viz_state    = "speaking"
-                    viz_progress = 0
-                elif current_mode == "ambient":
-                    if ambient_processing:
-                        viz_state    = "processing"
-                        viz_progress = 100
-                    else:
-                        viz_state    = "accumulating"
-                        viz_progress = int(len(ambient_chunks) / max(AMBIENT_TARGET, 1) * 100)
-                elif dialogue_processing:
-                    viz_state    = "processing"
-                    viz_progress = 100
-                elif vad_in_speech:
-                    viz_state    = "speech"
-                    viz_progress = 100
-                else:
-                    viz_state    = "waiting"
-                    viz_progress = 0
                 try:
                     socketio.emit("audio_level", {
                         "rms":      round(chunk_rms, 4),
                         "mode":     current_mode,
-                        "state":    viz_state,
+                        "state":    display_state,
                         "progress": viz_progress,
                     })
                 except Exception:
                     pass   # 無客戶端連線時忽略
 
-            # OLED 2：累積 RMS，每 0.5 秒更新一次波形
+            # ── OLED 2：累積 RMS，每 0.5 秒更新一次；傳入狀態控制圖樣 ──
             rms_history_oled2.append(chunk_rms)
             if len(rms_history_oled2) > 128:
                 rms_history_oled2.pop(0)
             oled2_chunk_count += 1
             if oled2_chunk_count >= OLED2_UPDATE_EVERY:
                 oled2_chunk_count = 0
-                _hist = list(rms_history_oled2)  # 快照，避免執行緒衝突
+                _hist  = list(rms_history_oled2)   # 快照，避免執行緒衝突
+                _state = display_state
+                _mode  = current_mode
                 threading.Thread(
-                    target=lambda h: send_to_oled2(rms_to_oled_bytes(h)),
-                    args=(_hist,),
+                    target=lambda h, s, m: send_to_oled2(rms_to_oled_bytes(h, s, m)),
+                    args=(_hist, _state, _mode),
                     daemon=True,
                 ).start()
 
