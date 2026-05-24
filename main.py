@@ -145,6 +145,7 @@ SYSTEM_PROMPT = """一、身份核心
 
 【對話模式（有人握住）】
 有人對它說話→直接回應內容，不解釋自己
+有人唱歌（對它唱）→以聲音特質回應：好不好聽、聲音高低、節奏感，不翻譯或分析歌詞內容；偶爾與浴室記憶中的歌聲比較
 握住但沉默超過30秒→主動開口：「你怎麼不說話？」「有人在嗎？」
 有人發出非語言聲音（笑聲、嘆氣、咳嗽）→隨機：直接反應 / 與記憶比較 / 困惑發問
 說它聽不懂的語言→英文用台式英文回應，其他語言描述聲音感覺
@@ -618,7 +619,8 @@ def ask_gemini_audio_dialogue(audio: np.ndarray) -> str | None:
             print(f"[VAD 聽到] 失敗：{e}")
 
     # 當前輪次：歷史（text）+ 本次音訊
-    current_parts = [{"text": ANCHOR_REMINDER}, audio_inline]
+    melody_hint = "（重要：若音訊中有旋律感或唱歌，請以聲音特質回應，例如好不好聽、聲音高低，不要翻譯或引用歌詞內容。）"
+    current_parts = [{"text": ANCHOR_REMINDER + melody_hint}, audio_inline]
     contents = (conversation_history + [{"role": "user", "parts": current_parts}]
                 if conversation_history else [{"role": "user", "parts": current_parts}])
 
