@@ -247,6 +247,8 @@ conversation_history    = []          # 對話記憶，收到 HANG\n 時清除
 silence_monologue_count = 0           # 本次靜音週期已說幾次自言自語
 last_monologue_time     = 0.0         # 上一次自言自語的時間
 dialogue_processing     = False       # 是否正在處理對話（防止重疊）
+ambient_processing      = False       # 是否正在處理環境音（背景執行緒）
+last_response           = ""          # 上一句蓮蓬頭說的話（避免重複句型）
 audio_queue             = queue.Queue(maxsize=300)  # PortAudio callback → 消費端
 oled_send_lock          = threading.Lock()          # 防止兩顆 OLED 同時寫 Serial
 
@@ -448,7 +450,9 @@ def speak(text: str):
 # ═══════════════════════════════════════════════════
 
 def respond(text: str):
+    global last_response
     with response_lock:
+        last_response = text
         print(f"\n蓮蓬頭：{text}\n")
         send_to_oled(text)
         speak(text)
@@ -528,9 +532,11 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
         print(f"[Gemini Audio] 音訊轉換失敗：{e}")
         return None
 
+    anti_repeat = (f"（上一句說的是「{last_response}」，這次必須換不同句型和開頭詞。）"
+                   if last_response else "")
     parts = [
         {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}},
-        {"text": ANCHOR_REMINDER},
+        {"text": ANCHOR_REMINDER + anti_repeat},
     ]
 
     # DEBUG 模式：先問 Gemini 聽到了什麼
@@ -679,6 +685,18 @@ def transcribe_audio(audio: np.ndarray) -> str:
     return ""
 
 
+def _process_ambient(audio: np.ndarray):
+    """背景執行緒：環境音分析 → Gemini → 回應（不阻塞 audio_loop）。"""
+    global ambient_processing, last_sound_time, silence_monologue_count
+    ambient_processing = True
+    try:
+        ans = ask_gemini_audio(audio)
+        if ans:
+            respond(ans)
+    finally:
+        ambient_processing = False
+
+
 def _process_dialogue(audio: np.ndarray):
     """背景執行緒：音訊直送 Gemini（帶歷史，單次 API）→ 回應。"""
     global dialogue_processing
@@ -767,8 +785,12 @@ def audio_loop():
                 viz_chunk_count = 0
                 # state / progress 供 viz.html 顯示收音狀態
                 if current_mode == "ambient":
-                    viz_state    = "accumulating"
-                    viz_progress = int(len(ambient_chunks) / max(AMBIENT_TARGET, 1) * 100)
+                    if ambient_processing:
+                        viz_state    = "processing"
+                        viz_progress = 100
+                    else:
+                        viz_state    = "accumulating"
+                        viz_progress = int(len(ambient_chunks) / max(AMBIENT_TARGET, 1) * 100)
                 elif dialogue_processing:
                     viz_state    = "processing"
                     viz_progress = 100
@@ -834,9 +856,12 @@ def audio_loop():
                     if rms >= 0.015:
                         last_sound_time = time.time()
                         silence_monologue_count = 0
-                        ans = ask_gemini_audio(full_audio)
-                        if ans:
-                            respond(ans)
+                        if not ambient_processing:   # 前一次還沒處理完則跳過
+                            threading.Thread(
+                                target=_process_ambient,
+                                args=(full_audio,),
+                                daemon=True,
+                            ).start()
                     else:
                         now = time.time()
                         elapsed = now - last_sound_time
