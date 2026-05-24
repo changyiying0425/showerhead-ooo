@@ -98,13 +98,16 @@
 
 **模式二：對話模式（觀眾握住 FSR 時）**
 ```
-FSR HOLD → Python 切換對話模式
-→ Chrome Web Speech API（SocketIO transcript 事件）收音轉文字
+FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
+→ PortAudio InputStream 持續收音（0.1s chunks）
+→ RMS VAD：語音 rms≥0.015，靜音超過 800ms → 句尾切段
+→ transcribe_audio(audio) → Gemini 純轉錄（無 system prompt）
 → ask_gemini(text, use_history=True) → 帶入 conversation_history
-→ Gemini 回應 → OLED 顯示文字 + ElevenLabs TTS → 喇叭
+→ Gemini 回應（蓮蓬頭個性）→ OLED 顯示文字 + ElevenLabs TTS → 喇叭
 → FSR RELEASE → 回到環境音模式
+→ 30 秒無語音 → 主動開口
 ```
-> ⚠️ 升級計畫：改為音訊直送 Gemini multimodal + VAD 靜音切段（靜音 > 800ms 斷句），取代 Chrome Web Speech API。尚未實作。
+✅ 已實作（2026-05-24）：`audio_loop()` 統一處理環境音與對話 VAD，不再需要 Chrome Web Speech API。
 
 **模式三：重置模式（蓮蓬頭掛回時）**
 ```
@@ -121,7 +124,7 @@ FSR HOLD → Python 切換對話模式
 | Arduino Nano | 讀取微動開關 + FSR、驅動 OLED、傳訊號給 Python |
 | 麥克風 | 收環境音及觀眾說話聲音 |
 | Python（main.py） | 整個系統的大腦，串聯所有服務，管理對話記憶 |
-| VAD（RMS 靜音偵測） | 對話模式中偵測句尾（靜音 > 800ms），切出音訊片段 |
+| VAD（RMS 靜音偵測） | 對話模式中偵測句尾（靜音 > 800ms），切出音訊片段；PortAudio InputStream 統一收音 |
 | Gemini multimodal API | 直接分析音訊內容，產生蓮蓬頭個性回應（取代 librosa + Web Speech） |
 | ElevenLabs | 文字轉語音 |
 | Voicemeeter Banana | 所有播出聲音自動加悶聲混響 |
@@ -510,7 +513,7 @@ SCL ─┤          ├─ 3.3V
 - [x] **升級 Gemini 為 multimodal 音訊輸入（環境音模式）** — `ask_gemini_audio()` 已實作
 - [x] **Python 加入每次對話的 instruction anchoring** — `ANCHOR_REMINDER` 已實作
 - [x] **Python 加入對話記憶（conversation_history）+ 收到 HANG\n 時清除**
-- [ ] **Python VAD 靜音切段邏輯實作（對話模式，靜音 > 800ms 觸發斷句）** — 目前對話模式仍用 Chrome Web Speech
+- [x] **Python VAD 靜音切段邏輯實作（對話模式，靜音 > 800ms 觸發斷句）** — PortAudio InputStream + Queue 統一收音，transcribe_audio() 轉錄，ask_gemini() 帶歷史回應（2026-05-24）
 - [ ] 展覽用喇叭（目前暫用電腦喇叭）
 - [ ] 全系統整合測試（含 Arduino 微動開關 + 展場完整佈線）
 - [ ] ~~瀏覽器 Web Speech API 介面設定與測試~~ → 對話模式升級後由 Gemini multimodal 取代
@@ -545,4 +548,4 @@ SCL ─┤          ├─ 3.3V
 - **Skill 文件**（system prompt 重構）：現有簡短 SYSTEM_PROMPT 將擴充為 9 章節完整 skill 文件，包含身份核心、禁止項目、說話規則、情境分支、記憶規則、多樣化規則、語氣示範庫、特殊狀況、重置機制。逐步與作者共同填寫。
 - **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作，效果與 Gem 相同。
 
-*最後更新：2026-05-22（CLAUDE.md 大整理：System Prompt 更新為 9 章節版、待辦修正、架構描述同步）*
+*最後更新：2026-05-24（Task C 完成：VAD 對話模式，PortAudio InputStream 統一收音，取代 Chrome Web Speech API）*

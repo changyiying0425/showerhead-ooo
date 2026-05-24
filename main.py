@@ -6,7 +6,6 @@ Object-Oriented Ontology 互動裝置
   1. 複製 .env.example → .env，填入 API 金鑰
   2. pip install -r requirements.txt
   3. 燒錄 arduino/showerhead/showerhead.ino 到 Arduino Nano
-  4. 用 Chrome 開啟 http://localhost:5000
 """
 
 import os
@@ -14,6 +13,7 @@ import sys
 import io
 import time
 import wave
+import queue
 import base64
 import threading
 import tempfile
@@ -45,9 +45,13 @@ if _ffmpeg_dir and _ffmpeg_dir not in os.environ.get("PATH", ""):
 SERIAL_PORT      = os.getenv("SERIAL_PORT", "COM3")
 BAUD_RATE        = 115200
 SAMPLE_RATE      = 44100
-AMBIENT_SECONDS     = 10    # 每幾秒分析一次環境音
-SILENCE_TIMEOUT     = 300   # 超過幾秒無聲 → 開始自言自語（5 分鐘）
-MONOLOGUE_INTERVAL  = 30    # 安靜時自言自語之間的間隔（秒）
+AMBIENT_SECONDS        = 10    # 環境音模式：每幾秒分析一次
+SILENCE_TIMEOUT        = 300   # 超過幾秒無聲 → 開始自言自語（5 分鐘）
+MONOLOGUE_INTERVAL     = 30    # 安靜時自言自語之間的間隔（秒）
+VAD_CHUNK_SECONDS      = 0.1   # 每次音訊片段長度（秒）
+VAD_SILENCE_CHUNKS     = 8     # 靜音超過幾個 chunk 視為句尾（800ms）
+VAD_MIN_SPEECH_CHUNKS  = 3     # 至少要有幾個 chunk 的語音才觸發（300ms）
+VAD_DIALOGUE_SILENCE   = 30    # 對話模式靜音超過幾秒，主動開口
 ELEVENLABS_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
 FONT_PATH        = os.getenv("FONT_PATH", r"C:\Windows\Fonts\msjh.ttc")  # 微軟正黑體
 DEBUG            = True     # 測試模式：印出 Gemini 聽到的內容（上線展覽前改為 False）
@@ -241,6 +245,8 @@ response_lock           = threading.Lock()
 conversation_history    = []          # 對話記憶，收到 HANG\n 時清除
 silence_monologue_count = 0           # 本次靜音週期已說幾次自言自語
 last_monologue_time     = 0.0         # 上一次自言自語的時間
+dialogue_processing     = False       # 是否正在處理對話（防止重疊）
+audio_queue             = queue.Queue(maxsize=300)  # PortAudio callback → 消費端
 
 # ═══════════════════════════════════════════════════
 #  OLED 點陣圖產生（PIL → U8g2 頁格式）
@@ -511,68 +517,231 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
 
 
 # ═══════════════════════════════════════════════════
-#  背景執行緒 1：環境音模式
+#  VAD 對話模式：音訊轉錄 + 處理
 # ═══════════════════════════════════════════════════
 
-def ambient_loop():
+def transcribe_audio(audio: np.ndarray) -> str:
+    """將音訊送 Gemini，純粹轉錄成文字（無 system prompt，無個性）。"""
+    try:
+        wav_bytes = numpy_to_wav_bytes(audio)
+        audio_b64 = base64.b64encode(wav_bytes).decode()
+    except Exception as e:
+        print(f"[VAD] 音訊轉換失敗：{e}")
+        return ""
+
+    parts = [
+        {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}},
+        {"text": "這段音訊裡的人說了什麼？請只輸出說話的文字內容，沒有人說話就輸出空字串。"},
+    ]
+
+    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+        for attempt in range(2):
+            try:
+                resp = gemini.models.generate_content(
+                    model=model,
+                    contents=[{"role": "user", "parts": parts}],
+                )
+                return resp.text.strip()
+            except Exception as e:
+                err = str(e)
+                if "503" in err and attempt == 0:
+                    print(f"[VAD] {model} 503，2 秒後重試...")
+                    time.sleep(2)
+                else:
+                    print(f"[VAD] {model} 錯誤：{e}")
+                    break
+    return ""
+
+
+def _process_dialogue(audio: np.ndarray):
+    """背景執行緒：轉錄 → 問 Gemini（帶歷史）→ 回應。"""
+    global dialogue_processing
+    dialogue_processing = True
+    try:
+        text = transcribe_audio(audio)
+        if DEBUG:
+            print(f"[VAD 轉錄] {text!r}")
+        if not text:
+            print("[VAD] 轉錄為空，略過")
+            return
+        print(f"觀眾說：{text}")
+        ans = ask_gemini(text, use_history=True)
+        if ans:
+            respond(ans)
+    finally:
+        dialogue_processing = False
+
+
+# ═══════════════════════════════════════════════════
+#  PortAudio 回呼：持續把音訊片段送入佇列
+# ═══════════════════════════════════════════════════
+
+def _audio_input_callback(indata, frames, time_info, status):
+    try:
+        audio_queue.put_nowait(indata.flatten().copy())
+    except queue.Full:
+        pass  # 緩衝滿時丟棄最舊的片段
+
+
+# ═══════════════════════════════════════════════════
+#  主音訊迴圈：環境音 + 對話 VAD 統一處理
+# ═══════════════════════════════════════════════════
+
+def audio_loop():
+    """
+    使用 PortAudio InputStream 持續收音，根據 mode 切換兩種處理方式：
+    - ambient：累積 10 秒後整段送 Gemini multimodal
+    - dialogue：VAD 靜音切段，每句話單獨轉錄後送 Gemini
+    """
     global mode, last_sound_time, silence_monologue_count, last_monologue_time
+    global dialogue_processing
 
-    while True:
-        if mode != "ambient":
-            time.sleep(1)
-            continue
+    CHUNK_SAMPLES    = int(VAD_CHUNK_SECONDS * SAMPLE_RATE)   # 4410 samples
+    AMBIENT_TARGET   = int(AMBIENT_SECONDS / VAD_CHUNK_SECONDS)  # 100 chunks = 10s
 
-        # 錄音
+    # ── 環境音模式暫存 ──
+    ambient_chunks = []
+
+    # ── 對話模式 VAD 暫存 ──
+    speech_chunks     = []
+    vad_silence_count = 0
+    vad_in_speech     = False
+    last_speech_time  = time.time()   # 對話模式：最近偵測到語音的時間
+
+    prev_mode = mode
+
+    try:
+        stream = sd.InputStream(
+            samplerate=SAMPLE_RATE, channels=1, dtype="float32",
+            blocksize=CHUNK_SAMPLES,
+            callback=_audio_input_callback,
+        )
+        stream.start()
+        print("[音訊] InputStream 啟動")
+    except Exception as e:
+        print(f"[音訊] 無法啟動 InputStream：{e}")
+        return
+
+    try:
+        while True:
+            try:
+                chunk = audio_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            current_mode = mode   # 快照，避免執行緒競爭
+
+            # ────────── 偵測模式切換 ──────────
+            if current_mode != prev_mode:
+                if current_mode == "dialogue":
+                    # 剛切入對話模式：清掉環境音緩存，重置 VAD 計時
+                    ambient_chunks = []
+                    speech_chunks  = []
+                    vad_silence_count = 0
+                    vad_in_speech     = False
+                    last_speech_time  = time.time()
+                elif current_mode == "ambient":
+                    # 剛切回環境音模式：清掉對話緩存
+                    speech_chunks  = []
+                    vad_silence_count = 0
+                    vad_in_speech     = False
+                prev_mode = current_mode
+
+            # ════════════════════════════════
+            #  環境音模式
+            # ════════════════════════════════
+            if current_mode == "ambient":
+                ambient_chunks.append(chunk)
+
+                if len(ambient_chunks) >= AMBIENT_TARGET:
+                    full_audio = np.concatenate(ambient_chunks)
+                    ambient_chunks = []
+
+                    rms = float(np.sqrt(np.mean(full_audio ** 2)))
+                    print(f"[偵測] rms={rms:.4f}  {'有聲音' if rms >= 0.015 else '安靜'}")
+
+                    if rms >= 0.015:
+                        last_sound_time = time.time()
+                        silence_monologue_count = 0
+                        ans = ask_gemini_audio(full_audio)
+                        if ans:
+                            respond(ans)
+                    else:
+                        now = time.time()
+                        elapsed = now - last_sound_time
+
+                        if silence_monologue_count == 0 and elapsed > SILENCE_TIMEOUT:
+                            ans = ask_gemini("四周很安靜，好一陣子了。說一句自言自語。")
+                            if ans:
+                                respond(ans)
+                            silence_monologue_count = 1
+                            last_monologue_time = time.time()
+
+                        elif 0 < silence_monologue_count < 3:
+                            if now - last_monologue_time > MONOLOGUE_INTERVAL:
+                                ans = ask_gemini("四周很安靜，好一陣子了。說一句自言自語。")
+                                if ans:
+                                    respond(ans)
+                                silence_monologue_count += 1
+                                last_monologue_time = time.time()
+
+                        elif silence_monologue_count >= 3:
+                            silence_monologue_count = 0
+                            last_sound_time = time.time()
+
+            # ════════════════════════════════
+            #  對話模式（VAD）
+            # ════════════════════════════════
+            elif current_mode == "dialogue":
+                if dialogue_processing:
+                    continue   # 上一句還在處理，先跳過
+
+                rms = float(np.sqrt(np.mean(chunk ** 2)))
+
+                if rms >= 0.015:
+                    # 有語音
+                    speech_chunks.append(chunk)
+                    vad_silence_count = 0
+                    vad_in_speech     = True
+                    last_speech_time  = time.time()
+                else:
+                    # 靜音
+                    if vad_in_speech:
+                        speech_chunks.append(chunk)
+                        vad_silence_count += 1
+
+                        if vad_silence_count >= VAD_SILENCE_CHUNKS:
+                            # 靜音超過 800ms → 句尾
+                            if len(speech_chunks) >= VAD_MIN_SPEECH_CHUNKS:
+                                audio_seg = np.concatenate(speech_chunks)
+                                threading.Thread(
+                                    target=_process_dialogue,
+                                    args=(audio_seg,),
+                                    daemon=True,
+                                ).start()
+                            # 不管有無達門檻都重置
+                            speech_chunks     = []
+                            vad_silence_count = 0
+                            vad_in_speech     = False
+                    else:
+                        # 尚未偵測到語音，計算對話靜音時長
+                        if (not dialogue_processing and
+                                time.time() - last_speech_time > VAD_DIALOGUE_SILENCE):
+                            ans = ask_gemini(
+                                "對方握著你但一直沒有說話，超過30秒了。主動開口問他。"
+                            )
+                            if ans:
+                                respond(ans)
+                            last_speech_time = time.time()   # 重置，避免連續觸發
+
+    except Exception as e:
+        print(f"[音訊] 迴圈錯誤：{e}")
+    finally:
         try:
-            audio = sd.rec(int(AMBIENT_SECONDS * SAMPLE_RATE),
-                           samplerate=SAMPLE_RATE, channels=1, dtype="float32")
-            sd.wait()
-        except Exception as e:
-            print(f"[音頻] 錄音失敗：{e}")
-            time.sleep(5)
-            continue
-
-        if mode != "ambient":
-            continue
-
-        audio_flat = audio.flatten()
-        rms = float(np.sqrt(np.mean(audio_flat ** 2)))
-        print(f"[偵測] rms={rms:.4f}  {'有聲音' if rms >= 0.015 else '安靜'}")
-
-        if rms >= 0.015:
-            # 有聲音：直接送 Gemini multimodal
-            last_sound_time = time.time()
-            silence_monologue_count = 0   # 重置安靜計數
-            ans = ask_gemini_audio(audio_flat)
-            if ans:
-                respond(ans)
-
-        else:
-            # 安靜：5 分鐘後開始自言自語，共三次，每次間隔 30 秒
-            now = time.time()
-            elapsed_since_sound = now - last_sound_time
-
-            if silence_monologue_count == 0 and elapsed_since_sound > SILENCE_TIMEOUT:
-                # 第一次：安靜滿 5 分鐘
-                ans = ask_gemini("四周很安靜，好一陣子了。說一句自言自語。")
-                if ans:
-                    respond(ans)
-                silence_monologue_count = 1
-                last_monologue_time = time.time()
-
-            elif 0 < silence_monologue_count < 3:
-                # 第二、三次：距上次滿 30 秒
-                if now - last_monologue_time > MONOLOGUE_INTERVAL:
-                    ans = ask_gemini("四周很安靜，好一陣子了。說一句自言自語。")
-                    if ans:
-                        respond(ans)
-                    silence_monologue_count += 1
-                    last_monologue_time = time.time()
-
-            elif silence_monologue_count >= 3:
-                # 三次完畢，重置並等待下一個 5 分鐘靜音週期
-                silence_monologue_count = 0
-                last_sound_time = time.time()
+            stream.stop()
+            stream.close()
+        except Exception:
+            pass
 
 
 # ═══════════════════════════════════════════════════
@@ -616,7 +785,6 @@ def _switch_dialogue():
         mode = "dialogue"
         print("[模式] → 對話")
         send_to_oled("聽著...")
-        socketio.emit("start_listening")
 
 
 def _switch_ambient():
@@ -676,11 +844,10 @@ if __name__ == "__main__":
     print("  蓮蓬頭 — OOO 互動裝置  啟動中...")
     print("=" * 45)
 
-    for target in (arduino_loop, ambient_loop):
+    for target in (arduino_loop, audio_loop):
         t = threading.Thread(target=target, daemon=True)
         t.start()
 
-    print("Web Speech 介面：http://localhost:5000")
-    print("請用 Chrome 開啟以上網址\n")
+    print("Flask 路由仍可用（/scan 等），但不再需要 Chrome Web Speech\n")
 
     socketio.run(app, host="0.0.0.0", port=5000, debug=False, use_reloader=False)
