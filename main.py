@@ -45,13 +45,14 @@ if _ffmpeg_dir and _ffmpeg_dir not in os.environ.get("PATH", ""):
 SERIAL_PORT      = os.getenv("SERIAL_PORT", "COM3")
 BAUD_RATE        = 115200
 SAMPLE_RATE      = 44100
-AMBIENT_SECONDS        = 10    # 環境音模式：每幾秒分析一次
+AMBIENT_SECONDS        = 5     # 環境音模式：每幾秒分析一次（縮短以降低延遲）
 SILENCE_TIMEOUT        = 300   # 超過幾秒無聲 → 開始自言自語（5 分鐘）
 MONOLOGUE_INTERVAL     = 30    # 安靜時自言自語之間的間隔（秒）
 VAD_CHUNK_SECONDS      = 0.1   # 每次音訊片段長度（秒）
-VAD_SILENCE_CHUNKS     = 8     # 靜音超過幾個 chunk 視為句尾（800ms）
+VAD_SILENCE_CHUNKS     = 6     # 靜音超過幾個 chunk 視為句尾（600ms）
 VAD_MIN_SPEECH_CHUNKS  = 3     # 至少要有幾個 chunk 的語音才觸發（300ms）
 VAD_DIALOGUE_SILENCE   = 30    # 對話模式靜音超過幾秒，主動開口
+VIZ_EMIT_EVERY         = 3     # 每幾個 chunk emit 一次 SocketIO（降低 lag）
 ELEVENLABS_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
 FONT_PATH        = os.getenv("FONT_PATH", r"C:\Windows\Fonts\msjh.ttc")  # 微軟正黑體
 DEBUG            = True     # 測試模式：印出 Gemini 聽到的內容（上線展覽前改為 False）
@@ -571,6 +572,77 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
 
 
 # ═══════════════════════════════════════════════════
+#  Gemini 對話模式音訊呼叫（audio + history，單次 API）
+# ═══════════════════════════════════════════════════
+
+def ask_gemini_audio_dialogue(audio: np.ndarray) -> str | None:
+    """
+    對話模式專用：音訊直送 Gemini，同時帶入 conversation_history。
+    取代原本的 transcribe_audio() + ask_gemini() 兩次 API 呼叫，降低延遲。
+    """
+    global conversation_history
+
+    try:
+        wav_bytes = numpy_to_wav_bytes(audio)
+        audio_b64 = base64.b64encode(wav_bytes).decode()
+    except Exception as e:
+        print(f"[VAD] 音訊轉換失敗：{e}")
+        return None
+
+    audio_inline = {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}}
+
+    # DEBUG：先問 Gemini 聽到了什麼
+    if DEBUG:
+        try:
+            debug_resp = gemini.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[{"role": "user", "parts": [
+                    audio_inline,
+                    {"text": "這段音訊裡的人說了什麼？一句話描述。"},
+                ]}],
+            )
+            print(f"[VAD 聽到] {debug_resp.text.strip()}")
+        except Exception as e:
+            print(f"[VAD 聽到] 失敗：{e}")
+
+    # 當前輪次：歷史（text）+ 本次音訊
+    current_parts = [{"text": ANCHOR_REMINDER}, audio_inline]
+    contents = (conversation_history + [{"role": "user", "parts": current_parts}]
+                if conversation_history else [{"role": "user", "parts": current_parts}])
+
+    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+        for attempt in range(2):
+            try:
+                resp = gemini.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    ),
+                )
+                result = resp.text.strip()
+
+                # 更新對話歷史（user 用 [音訊] placeholder，model 用實際回應）
+                conversation_history.append(
+                    {"role": "user", "parts": [{"text": f"{ANCHOR_REMINDER}\n[音訊輸入]"}]}
+                )
+                conversation_history.append(
+                    {"role": "model", "parts": [{"text": result}]}
+                )
+                return result
+            except Exception as e:
+                err = str(e)
+                if "503" in err and attempt == 0:
+                    print(f"[VAD] {model} 503，2 秒後重試...")
+                    time.sleep(2)
+                else:
+                    print(f"[VAD] {model} 錯誤：{e}")
+                    break
+    return None
+
+
+# ═══════════════════════════════════════════════════
 #  VAD 對話模式：音訊轉錄 + 處理
 # ═══════════════════════════════════════════════════
 
@@ -608,20 +680,15 @@ def transcribe_audio(audio: np.ndarray) -> str:
 
 
 def _process_dialogue(audio: np.ndarray):
-    """背景執行緒：轉錄 → 問 Gemini（帶歷史）→ 回應。"""
+    """背景執行緒：音訊直送 Gemini（帶歷史，單次 API）→ 回應。"""
     global dialogue_processing
     dialogue_processing = True
     try:
-        text = transcribe_audio(audio)
-        if DEBUG:
-            print(f"[VAD 轉錄] {text!r}")
-        if not text:
-            print("[VAD] 轉錄為空，略過")
-            return
-        print(f"觀眾說：{text}")
-        ans = ask_gemini(text, use_history=True)
+        ans = ask_gemini_audio_dialogue(audio)
         if ans:
             respond(ans)
+        else:
+            print("[VAD] 無回應")
     finally:
         dialogue_processing = False
 
@@ -664,6 +731,9 @@ def audio_loop():
 
     prev_mode = mode
 
+    # ── SocketIO viz emit 計數 ──
+    viz_chunk_count = 0
+
     # ── OLED 2 波形更新 ──
     rms_history_oled2 = []   # 最多保留 128 筆
     oled2_chunk_count = 0
@@ -690,15 +760,33 @@ def audio_loop():
 
             current_mode = mode   # 快照，避免執行緒競爭
 
-            # 每個 chunk 都計算即時 RMS，推送給視覺化頁面 + OLED 2
+            # 每個 chunk 計算 RMS；每 VIZ_EMIT_EVERY 個 chunk emit 一次（降低 lag）
             chunk_rms = float(np.sqrt(np.mean(chunk ** 2)))
-            try:
-                socketio.emit("audio_level", {
-                    "rms": round(chunk_rms, 4),
-                    "mode": current_mode,
-                })
-            except Exception:
-                pass   # 無客戶端連線時忽略
+            viz_chunk_count += 1
+            if viz_chunk_count >= VIZ_EMIT_EVERY:
+                viz_chunk_count = 0
+                # state / progress 供 viz.html 顯示收音狀態
+                if current_mode == "ambient":
+                    viz_state    = "accumulating"
+                    viz_progress = int(len(ambient_chunks) / max(AMBIENT_TARGET, 1) * 100)
+                elif dialogue_processing:
+                    viz_state    = "processing"
+                    viz_progress = 100
+                elif vad_in_speech:
+                    viz_state    = "speech"
+                    viz_progress = 100
+                else:
+                    viz_state    = "waiting"
+                    viz_progress = 0
+                try:
+                    socketio.emit("audio_level", {
+                        "rms":      round(chunk_rms, 4),
+                        "mode":     current_mode,
+                        "state":    viz_state,
+                        "progress": viz_progress,
+                    })
+                except Exception:
+                    pass   # 無客戶端連線時忽略
 
             # OLED 2：累積 RMS，每 0.5 秒更新一次波形
             rms_history_oled2.append(chunk_rms)

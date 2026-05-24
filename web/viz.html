@@ -16,13 +16,49 @@
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      gap: 1.2rem;
+      gap: 1rem;
     }
 
     #mode-label {
       font-size: 1.1rem;
       letter-spacing: 0.15em;
       transition: color 0.3s;
+    }
+
+    #state-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      font-size: 0.8rem;
+      color: #666;
+      min-height: 1.4rem;
+    }
+
+    /* 進度條（環境音收音進度） */
+    #progress-wrap {
+      width: 200px;
+      height: 6px;
+      background: #222;
+      border-radius: 3px;
+      overflow: hidden;
+      display: none;
+    }
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #42b8ff;
+      border-radius: 3px;
+      transition: width 0.25s linear, background 0.3s;
+    }
+
+    /* 狀態點 */
+    #state-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #444;
+      flex-shrink: 0;
+      transition: background 0.2s;
     }
 
     #canvas-wrap {
@@ -34,83 +70,91 @@
       border-radius: 6px;
     }
 
-    /* 門檻標籤 */
     #thresh-label {
       position: absolute;
       right: 8px;
-      font-size: 0.65rem;
+      font-size: 0.6rem;
       color: #555;
       pointer-events: none;
     }
 
-    #status {
-      font-size: 0.75rem;
-      color: #444;
+    #rms-value {
+      font-size: 0.8rem;
+      color: #555;
     }
 
-    /* 目前 RMS 數值 */
-    #rms-value {
-      font-size: 0.85rem;
-      color: #666;
+    #status {
+      font-size: 0.7rem;
+      color: #333;
     }
   </style>
 </head>
 <body>
   <div id="mode-label">連線中…</div>
+
+  <div id="state-row">
+    <div id="state-dot"></div>
+    <span id="state-label">—</span>
+    <div id="progress-wrap">
+      <div id="progress-bar"></div>
+    </div>
+    <span id="progress-label"></span>
+  </div>
+
   <div id="canvas-wrap">
-    <canvas id="waveform" width="700" height="220"></canvas>
+    <canvas id="waveform" width="700" height="200"></canvas>
     <div id="thresh-label" style="top:0">rms 0.015</div>
   </div>
+
   <div id="rms-value">rms —</div>
   <div id="status">等待連線</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
   <script>
-    const canvas  = document.getElementById('waveform');
-    const ctx     = canvas.getContext('2d');
+    const canvas    = document.getElementById('waveform');
+    const ctx       = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
 
-    const HISTORY   = 140;    // 140 bars ≈ 14 秒歷史
-    const THRESHOLD = 0.015;  // 靜音門檻（與 main.py 一致）
-    const SCALE     = 5.5;    // RMS 放大倍數（讓波形更明顯）
+    const HISTORY   = 140;   // ~14 秒歷史（每 0.3s 一格）
+    const THRESHOLD = 0.015;
+    const SCALE     = 5.5;
 
     let history     = new Array(HISTORY).fill(0);
     let currentMode = 'ambient';
-    let latestRms   = 0;
+    let currentState= 'waiting';
 
-    // ── 顏色主題 ──
     const THEME = {
-      ambient:  { active: '#42b8ff', dim: '#0a1f3d', label: '環境音模式', labelColor: '#42b8ff' },
-      dialogue: { active: '#ff8c42', dim: '#3d1500', label: '對話模式（握住中）', labelColor: '#ff8c42' },
+      ambient:  { active: '#42b8ff', dim: '#0a1f3d', label: '環境音模式',       color: '#42b8ff' },
+      dialogue: { active: '#ff8c42', dim: '#3d1500', label: '對話模式（握住中）', color: '#ff8c42' },
+    };
+
+    const STATE_INFO = {
+      accumulating: { dot: '#42b8ff', text: '收音中' },
+      processing:   { dot: '#f5d020', text: '處理中' },
+      speech:       { dot: '#ff4444', text: '偵測到聲音' },
+      waiting:      { dot: '#333',    text: '等待聲音' },
     };
 
     function draw() {
       ctx.clearRect(0, 0, W, H);
-
-      // 背景
       ctx.fillStyle = '#0d0d0d';
       ctx.fillRect(0, 0, W, H);
 
       const theme  = THEME[currentMode] || THEME.ambient;
       const barW   = W / HISTORY;
-
-      // 門檻線 y 座標
       const threshH = Math.min(THRESHOLD * H * SCALE, H);
       const threshY = H - threshH;
 
-      // 波形條
       history.forEach((rms, i) => {
         const barH   = Math.min(rms * H * SCALE, H);
         const x      = i * barW;
-        const y      = H - barH;
         const active = rms >= THRESHOLD;
-
         ctx.fillStyle = active ? theme.active : theme.dim;
-        ctx.fillRect(x + 1, y, barW - 2, barH);
+        ctx.fillRect(x + 1, H - barH, barW - 2, barH);
       });
 
-      // 門檻虛線（疊在波形上）
-      ctx.strokeStyle = '#444';
+      // 門檻線
+      ctx.strokeStyle = '#333';
       ctx.lineWidth   = 1;
       ctx.setLineDash([5, 5]);
       ctx.beginPath();
@@ -119,14 +163,10 @@
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // 門檻標籤位置更新
       document.getElementById('thresh-label').style.top = (threshY - 16) + 'px';
     }
 
-    function loop() {
-      draw();
-      requestAnimationFrame(loop);
-    }
+    function loop() { draw(); requestAnimationFrame(loop); }
     loop();
 
     // ── SocketIO ──
@@ -135,28 +175,51 @@
     socket.on('connect', () => {
       document.getElementById('status').textContent = '已連線';
     });
-
     socket.on('disconnect', () => {
       document.getElementById('status').textContent = '已斷線';
       document.getElementById('mode-label').textContent = '已斷線';
-      document.getElementById('mode-label').style.color = '#666';
     });
 
     socket.on('audio_level', (data) => {
-      const rms  = data.rms  ?? 0;
-      const mode = data.mode ?? 'ambient';
+      const rms      = data.rms      ?? 0;
+      const mode     = data.mode     ?? 'ambient';
+      const state    = data.state    ?? 'waiting';
+      const progress = data.progress ?? 0;
 
       history.push(rms);
       if (history.length > HISTORY) history.shift();
 
-      latestRms   = rms;
-      currentMode = mode;
+      currentMode  = mode;
+      currentState = state;
 
+      // 模式標籤
       const theme = THEME[mode] || THEME.ambient;
-      document.getElementById('mode-label').textContent  = theme.label;
-      document.getElementById('mode-label').style.color  = theme.labelColor;
-      document.getElementById('rms-value').textContent   =
-        `rms ${rms.toFixed(4)}  ${rms >= 0.015 ? '● 有聲音' : '○ 安靜'}`;
+      document.getElementById('mode-label').textContent = theme.label;
+      document.getElementById('mode-label').style.color = theme.color;
+
+      // 狀態點 + 標籤
+      const si = STATE_INFO[state] || STATE_INFO.waiting;
+      document.getElementById('state-dot').style.background   = si.dot;
+      document.getElementById('state-label').textContent      = si.text;
+
+      // 進度條（只在 accumulating 時顯示）
+      const progWrap = document.getElementById('progress-wrap');
+      const progBar  = document.getElementById('progress-bar');
+      const progLbl  = document.getElementById('progress-label');
+      if (state === 'accumulating') {
+        progWrap.style.display = 'block';
+        progBar.style.width    = progress + '%';
+        progBar.style.background = theme.color;
+        const secs = Math.round(progress / 100 * 5);  // AMBIENT_SECONDS = 5
+        progLbl.textContent    = `${secs}/5s`;
+      } else {
+        progWrap.style.display = 'none';
+        progLbl.textContent    = '';
+      }
+
+      // RMS 數值
+      document.getElementById('rms-value').textContent =
+        `rms ${rms.toFixed(4)}  ${rms >= THRESHOLD ? '● 有聲音' : '○ 安靜'}`;
     });
   </script>
 </body>
