@@ -81,7 +81,7 @@ void setup() {
   u8g2.drawStr(50, 36, "...");
   u8g2.sendBuffer();
 
-  // 初始化 OLED 2
+  // 初始化 OLED 2（波形，待 Python 送資料）
   u8g2_2.begin();
   u8g2_2.clearBuffer();
   u8g2_2.sendBuffer();
