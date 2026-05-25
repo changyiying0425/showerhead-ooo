@@ -211,7 +211,7 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 | USB A公對A母延長線（150cm+） | Arduino USB 延長 | ❌ 待採購 |
 | 3.5mm 公對母延長線（150cm+）× 1 | 喇叭音源延長 | ❌ 待採購 |
 | TRS 公對母延長線（150cm+）× 2 | 麥克風分接頭至筆電（紅孔、綠孔各一條） | ❌ 待採購 |
-| USB 有源喇叭 | 播出聲音 | ⚠️ 暫用電腦喇叭替代 |
+| 3.5mm 直插小喇叭 + 3.5mm 轉 USB 音效線 | 播出聲音（USB 音效線解決 combo 孔偵測問題） | ✅ 已測試正常（2026-05-25） |
 | USB 集線器 | 同時接多個 USB | ✅ 已有 |
 | 塑膠蓮蓬頭 | 主體外觀 | ✅ 已有 |
 | PVC 水管 | 連接蓮蓬頭到箱體 | ✅ 已有 |
@@ -297,7 +297,7 @@ Arduino IDE 需安裝 Library：**U8g2 by oliver**
 | FSR 訊號線（A0） | 直接焊接延長導線 | — |
 | FSR 電源線（3.3V / GND） | 直接焊接延長導線 | — |
 | 微動開關（D2） | 直接焊接延長導線 | — |
-| 喇叭（3.5mm） | 公對母延長線 | — |
+| 喇叭（3.5mm 轉 USB） | USB A公對A母延長線（喇叭走 USB，不走 3.5mm 孔） | — |
 | 麥克風 TRRS | TRRS 公對母延長線（4節）或兩條 TRS 分開延長 | — |
 
 ### OLED I2C 上拉電阻（延長必要）
@@ -472,7 +472,8 @@ SCL ─┤          ├─ 3.3V
 
 ### 音訊路由
 - ElevenLabs 播放裝置 → **Voicemeeter Input（VAIO）**
-- Voicemeeter A1 輸出 → **Speakers (Realtek® Audio)**（目前暫用電腦喇叭）
+- Voicemeeter A1 輸出 → **USB 音效裝置**（3.5mm 直插喇叭 + 3.5mm 轉 USB 音效線）
+  - 筆電 combo 孔偵測問題透過 USB 音效線繞過，A1 選 `WDM: Speakers (USB Audio Device)` 或類似名稱
 
 ### VAIO 輸入條 EQ（簡易 2 段）
 | 旋鈕 | 設定值 |
@@ -568,7 +569,7 @@ SCL ─┤          ├─ 3.3V
 - [ ] **焊接 OLED I2C 延長線 + 加裝上拉電阻** — SDA 與 3.3V 之間接 4.7kΩ、SCL 與 3.3V 之間接 4.7kΩ，延長導線 150cm，焊後熱縮套管包覆
 - [ ] **焊接所有元件延長線** — FSR 訊號線（A0）/ 電源線（3.3V/GND）/ 微動開關（D2）各延長 150cm，完整佈線至箱體
 - [ ] **麥克風佈線確認** — 將 TRRS 轉雙 TRS 分接頭固定於箱體端，從分接頭拉兩條 TRS 延長線（紅孔/綠孔）至筆電
-- [ ] 展覽用喇叭（目前暫用電腦喇叭）
+- [x] **展覽用喇叭**（3.5mm 直插喇叭 + 3.5mm 轉 USB 音效線，2026-05-26 測試正常）
 - [ ] 全系統整合測試（含 Arduino 微動開關 + OLED 2 + 展場完整佈線）
 - [ ] ~~瀏覽器 Web Speech API 介面設定與測試~~ → 對話模式升級後由 Gemini multimodal 取代
 
@@ -585,7 +586,7 @@ SCL ─┤          ├─ 3.3V
 - melody 偵測條件：`(hr > 0.92 and zcr < 0.04) or (hr > 0.88 and zcr < 0.03 and rms > 0.025)`（說話 hr 約 0.86–0.88，不觸發）
 - 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
 - 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）
-- 麥克風：筆電為獨立耳機孔＋獨立麥克風孔（非 combo），TRRS 直插無聲；需透過 TRRS 轉雙 TRS 分接頭（紅接麥克風孔、綠接耳機孔）正常收音
+- 麥克風：筆電為單一 TRRS combo 孔，TRRS 直插無聲；需透過 TRRS 轉雙 TRS 分接頭正常收音。喇叭改走 3.5mm 轉 USB 音效線，不佔 combo 孔
 - 微動開關：D2（INPUT_PULLUP），COM→GND、NO→D2，80ms 軟體去彈跳，下降沿送 HANG\n
 - `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
 - **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
@@ -604,4 +605,4 @@ SCL ─┤          ├─ 3.3V
 - **Skill 文件**（system prompt 重構）：現有簡短 SYSTEM_PROMPT 將擴充為 9 章節完整 skill 文件，包含身份核心、禁止項目、說話規則、情境分支、記憶規則、多樣化規則、語氣示範庫、特殊狀況、重置機制。逐步與作者共同填寫。
 - **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作，效果與 Gem 相同。
 
-*最後更新：2026-05-25（OLED 2 硬體接線完成：軟體 I2C D6/D7，測試通過；接線圖改為 ASCII 圖）*
+*最後更新：2026-05-26（喇叭改用 3.5mm 轉 USB 音效線，繞過 combo 孔偵測問題，測試正常）*
