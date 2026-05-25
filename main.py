@@ -343,6 +343,7 @@ def rms_to_oled_bytes(rms_history: list,
     根據狀態與模式，產生對應的 OLED2 視覺圖樣：
 
     - speaking（說話中）   → 黑底 + 七條漸寬橫線（喇叭放射圖案）
+    - processing（處理中） → 黑底 + 放射 halftone 呼吸動畫（中心大點，邊緣小點）
     - dialogue（對話模式） → 白底 + 黑色點陣波形（反色，視覺上明顯變亮）
     - ambient（環境音）    → 黑底 + 白色點陣波形（25欄 × 16列，每點 3×3px）
     """
@@ -358,6 +359,32 @@ def rms_to_oled_bytes(rms_history: list,
             draw.line([(cx - hw, y), (cx + hw, y)], fill=1)
         # 中心實心圓點
         draw.ellipse([cx - 3, 29, cx + 3, 35], fill=1)
+
+    elif state == "processing":
+        # ── 處理中：放射 halftone 呼吸動畫 ──
+        # 中心最大點（~3px），越外面越小，整體隨時間呼吸縮放
+        pulse  = 0.3 + 0.7 * (float(np.sin(time.time() * np.pi * 2 / 2.0)) * 0.5 + 0.5)
+        # pulse 範圍 0.3（最小）~ 1.0（最大），週期 2 秒
+
+        img  = Image.new("1", (128, 64), 0)
+        draw = ImageDraw.Draw(img)
+
+        cx, cy = 63.5, 31.5   # 畫面中心
+        GRID   = 8             # 每格 8px → 16欄 × 8列 = 128 個點
+        MAX_R  = 3.5           # 中心最大點半徑（像素）
+        SIGMA2 = 2000.0        # 高斯衰減：dist≈50px → r≈1.0，dist≈65px → 消失
+
+        for row in range(8):
+            for col in range(16):
+                pcx  = col * GRID + GRID // 2   # 4, 12, 20 … 124
+                pcy  = row * GRID + GRID // 2   # 4, 12, 20 … 60
+                dx   = pcx - cx
+                dy   = pcy - cy
+                dist2   = dx * dx + dy * dy
+                falloff = float(np.exp(-dist2 / SIGMA2))
+                r = MAX_R * falloff * pulse
+                if r >= 0.5:
+                    draw.ellipse([pcx - r, pcy - r, pcx + r, pcy + r], fill=1)
 
     else:
         # ── 點陣波形；對話模式反色 ──
