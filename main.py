@@ -55,6 +55,7 @@ VAD_MIN_SPEECH_CHUNKS  = 3     # 至少要有幾個 chunk 的語音才觸發（3
 VAD_DIALOGUE_SILENCE   = 30    # 對話模式靜音超過幾秒，主動開口
 VIZ_EMIT_EVERY         = 3     # 每幾個 chunk emit 一次 SocketIO（降低 lag）
 SPEAKING_COOLDOWN      = 0.5   # TTS 播完後靜音閘額外延遲（秒），讓喇叭尾音消散再開始收音
+VAD_SPEECH_THRESHOLD   = 0.030 # 語音偵測門檻（背景噪音~0.017，說話~0.08，取中間）
 EDGE_TTS_VOICE   = "zh-TW-HsiaoChenNeural"   # 台灣中文女聲，免費無配額
 FONT_PATH        = os.getenv("FONT_PATH", r"C:\Windows\Fonts\msjh.ttc")  # 微軟正黑體
 _mic_idx         = os.getenv("MIC_DEVICE_INDEX", "")
@@ -349,7 +350,7 @@ def rms_to_oled_bytes(rms_history: list,
     - ambient（環境音）    → 黑底 + 白色 bar chart（原有波形）
     """
     SCALE    = 4.0
-    THRESH_Y = max(0, 63 - int(0.015 * 64 * SCALE))
+    THRESH_Y = max(0, 63 - int(VAD_SPEECH_THRESHOLD * 64 * SCALE))
 
     if state == "speaking":
         # ── 說話中：七條漸寬橫線，菱形放射，傳達「在說話」 ──
@@ -911,9 +912,9 @@ def audio_loop():
                     ambient_chunks = []
 
                     rms = float(np.sqrt(np.mean(full_audio ** 2)))
-                    print(f"[偵測] rms={rms:.4f}  {'有聲音' if rms >= 0.015 else '安靜'}")
+                    print(f"[偵測] rms={rms:.4f}  {'有聲音' if rms >= VAD_SPEECH_THRESHOLD else '安靜'}")
 
-                    if rms >= 0.015:
+                    if rms >= VAD_SPEECH_THRESHOLD:
                         last_sound_time = time.time()
                         silence_monologue_count = 0
                         if not ambient_processing:   # 前一次還沒處理完則跳過
@@ -954,7 +955,7 @@ def audio_loop():
 
                 rms = float(np.sqrt(np.mean(chunk ** 2)))
 
-                if rms >= 0.015:
+                if rms >= VAD_SPEECH_THRESHOLD:
                     # 有語音
                     speech_chunks.append(chunk)
                     vad_silence_count = 0
