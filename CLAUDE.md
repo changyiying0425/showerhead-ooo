@@ -563,7 +563,7 @@ SCL ─┤          ├─ 3.3V
 - [x] **音訊波形視覺化網頁（/viz）** — Flask + SocketIO 推送即時 RMS，藍色=環境音 / 橘色=對話，可外接螢幕（2026-05-24）
 - [x] **OLED 2 波形顯示支援（程式碼完成）** — header 0xFC、rms_to_oled_bytes()、send_to_oled2()、audio_loop 每 0.5 秒更新；oled_send_lock 防衝突（2026-05-24）
 - [x] **Arduino 支援雙 OLED（程式碼完成）** — receiveBitmapToOled() 共用函數，header 0xFD→OLED1、0xFC→OLED2（2026-05-24）
-- [ ] **OLED 2 硬體接線** — 採購第二顆 SH1106，SA0 接 VCC（→ I2C 0x3D），SDA/SCL 並聯，重新燒錄 Arduino
+- [x] **OLED 2 硬體接線完成**（2026-05-25）— 兩顆均為 4 腳位無 SA0，改用軟體 I2C（D6=SCK, D7=SDA），地址同為 0x3C 但不衝突，測試顯示正常
 - [ ] **採購展場佈線延長元件** — 4.7kΩ 電阻 × 2、USB A公對A母延長線（150cm+）、3.5mm 公對母延長線（150cm+）× 1、TRS 公對母延長線（150cm+）× 2
 - [ ] **焊接 OLED I2C 延長線 + 加裝上拉電阻** — SDA 與 3.3V 之間接 4.7kΩ、SCL 與 3.3V 之間接 4.7kΩ，延長導線 150cm，焊後熱縮套管包覆
 - [ ] **焊接所有元件延長線** — FSR 訊號線（A0）/ 電源線（3.3V/GND）/ 微動開關（D2）各延長 150cm，完整佈線至箱體
@@ -594,6 +594,7 @@ SCL ─┤          ├─ 3.3V
 - Arduino serial buffer 64 bytes，Python 一次送 1027 bytes，必須零 delay 才能即時消化
 - Windows Store 版 Arduino IDE 無法存取 COM port（沙盒限制），需用官網 .exe 安裝版
 - Arduino Nano clone 使用 CH340 晶片，需安裝 CH341SER.EXE 驅動；燒錄選 ATmega328P (Old Bootloader)
+- **OLED 雙螢幕方案**：兩顆 SH1106 均為 4 腳位（無 SA0 腳位），無法靠 SA0 區分地址。改用軟體 I2C（`U8G2_SW_I2C`），OLED 2 接 D6=SCK / D7=SDA，地址同為 0x3C 但走不同腳位不衝突。OLED 2 不需 I2C 上拉電阻（軟體 I2C 訊號穩定）
 
 ### 新架構決策（2026-05-21）
 - **Gemini multimodal 音訊輸入**：音訊片段直接傳給 Gemini，不再先用 librosa 提取數值特徵再轉文字描述。Gemini 可直接辨識語音內容、歌聲、咳嗽、環境音等，理解品質大幅提升。
@@ -603,4 +604,4 @@ SCL ─┤          ├─ 3.3V
 - **Skill 文件**（system prompt 重構）：現有簡短 SYSTEM_PROMPT 將擴充為 9 章節完整 skill 文件，包含身份核心、禁止項目、說話規則、情境分支、記憶規則、多樣化規則、語氣示範庫、特殊狀況、重置機制。逐步與作者共同填寫。
 - **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作，效果與 Gem 相同。
 
-*最後更新：2026-05-24（新增：/viz 波形視覺化網頁、OLED 2 波形顯示程式、thinking_budget=0 修正，CLAUDE.md 全面同步）*
+*最後更新：2026-05-25（OLED 2 硬體接線完成：軟體 I2C D6/D7，測試通過；接線圖改為 ASCII 圖）*
