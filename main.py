@@ -343,12 +343,9 @@ def rms_to_oled_bytes(rms_history: list,
     根據狀態與模式，產生對應的 OLED2 視覺圖樣：
 
     - speaking（說話中）   → 黑底 + 七條漸寬橫線（喇叭放射圖案）
-    - dialogue（對話模式） → 白底 + 黑色 bar chart（反色，視覺上明顯變亮）
-    - ambient（環境音）    → 黑底 + 白色 bar chart（原有波形）
+    - dialogue（對話模式） → 白底 + 黑色點陣波形（反色，視覺上明顯變亮）
+    - ambient（環境音）    → 黑底 + 白色點陣波形（25欄 × 16列，每點 3×3px）
     """
-    SCALE    = 4.0
-    THRESH_Y = max(0, 63 - int(0.015 * 64 * SCALE))
-
     if state == "speaking":
         # ── 說話中：七條漸寬橫線，菱形放射，傳達「在說話」 ──
         img  = Image.new("1", (128, 64), 0)
@@ -363,28 +360,33 @@ def rms_to_oled_bytes(rms_history: list,
         draw.ellipse([cx - 3, 29, cx + 3, 35], fill=1)
 
     else:
-        # ── 波形 bar chart；對話模式反色 ──
+        # ── 點陣波形；對話模式反色 ──
+        DOT        = 3          # 每個點 3×3 像素
+        CELL_W     = 5          # 欄寬（3px 點 + 2px 間距） → 25 欄
+        CELL_H     = 4          # 列高（3px 點 + 1px 間距） → 16 列
+        COLS       = 128 // CELL_W   # 25
+        ROWS       = 64  // CELL_H   # 16
+        SCALE_DOTS = 9.0        # rms 0.08 → ~11 點，rms 0.015 → ~2 點
+
         bg_color  = 1 if mode == "dialogue" else 0
-        bar_color = 0 if mode == "dialogue" else 1
-        thr_color = 0 if mode == "dialogue" else 1
+        dot_color = 0 if mode == "dialogue" else 1
 
         img  = Image.new("1", (128, 64), bg_color)
         draw = ImageDraw.Draw(img)
 
-        data  = rms_history[-128:]
-        n     = len(data)
-        bar_w = max(1, 128 // n) if n else 1
+        # 取最近 COLS 筆資料，不足則補 0
+        data = list(rms_history[-COLS:])
+        while len(data) < COLS:
+            data.insert(0, 0.0)
 
-        for i, rms in enumerate(data):
-            bar_h = min(int(rms * 64 * SCALE), 62)
-            if bar_h == 0 and rms > 0:
-                bar_h = 1
-            x0 = i * bar_w
-            x1 = min(x0 + bar_w - 1, 127)
-            draw.rectangle([x0, 63 - bar_h, x1, 63], fill=bar_color)
-
-        # 門檻線
-        draw.line([(0, THRESH_Y), (127, THRESH_Y)], fill=thr_color)
+        for col, rms_val in enumerate(data):
+            dots = min(int(rms_val * ROWS * SCALE_DOTS), ROWS)
+            x0 = col * CELL_W
+            x1 = x0 + DOT - 1
+            for row in range(dots):        # row=0 在底部，往上疊
+                y0 = 64 - (row + 1) * CELL_H
+                y1 = y0 + DOT - 1
+                draw.rectangle([x0, y0, x1, y1], fill=dot_color)
 
     pixels = np.array(img)
     buf = bytearray(1024)
