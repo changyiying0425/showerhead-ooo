@@ -222,25 +222,61 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 ---
 
 ## Arduino 接線
+
 ```
-FSR 分壓電路（不使用麵包板，直接焊接或絞接）：
-  FSR 一端 → 3.3V
-  FSR 另一端 → A0，同時接 10kΩ 電阻到 GND
+                        Arduino Nano
+                    ┌───────────────────┐
+              3.3V ─┤ 3V3           D2  ├──── 微動開關 NO
+               GND ─┤ GND          D6  ├──── OLED 2 SCK
+                    │              D7  ├──── OLED 2 SDA
+                    │             A4   ├──── OLED 1 SDA
+                    │             A5   ├──── OLED 1 SCK
+                    │             A0   ├──── FSR（訊號端）
+                    │        USB → 筆電│
+                    └───────────────────┘
 
-OLED SH1106 I2C（4 腳位 IIC 版本）：
-  OLED GND → GND
-  OLED VCC → 3.3V
-  OLED SCK → A5 (SCL)
-  OLED SDA → A4 (SDA)
+  FSR 分壓電路（不使用麵包板，直接焊接或絞接）：
+    FSR 一端 ──────────────────── 3.3V
+    FSR 另一端 ─┬──────────────── A0
+               └── 10kΩ ──────── GND
 
-微動開關（重置機制）：
-  微動開關 COM → GND
-  微動開關 NO  → D2（數位腳位，使用 INPUT_PULLUP，不需外接電阻）
-  說明：蓮蓬頭掛回時按下開關 → D2 讀到 LOW → Arduino 送 HANG\n 給 Python
+  微動開關（重置機制）：
+    微動開關 COM ─────────────── GND
+    微動開關 NO  ─────────────── D2（INPUT_PULLUP，不需外接電阻）
+    蓮蓬頭掛回 → 按下 → D2=LOW → Arduino 送 HANG
 
-Arduino Nano USB → 筆電（透過 USB 集線器）
+  OLED 1（文字顯示）— 硬體 I2C，地址 0x3C：
+    GND ────────────────────── GND
+    VCC ────────────────────── 3.3V
+    SCK ────────────────────── A5
+    SDA ────────────────────── A4
+
+  OLED 2（波形顯示）— 軟體 I2C，地址 0x3C（不衝突）：
+    GND ────────────────────── GND
+    VCC ────────────────────── 3.3V
+    SCK ────────────────────── D6   ← 注意！不是 A5
+    SDA ────────────────────── D7   ← 注意！不是 A4
+
+  I2C 延長上拉電阻（OLED 1 延長 >50cm 時加，OLED 2 不需要）：
+    OLED 1 SDA ── 4.7kΩ ── 3.3V
+    OLED 1 SCL ── 4.7kΩ ── 3.3V
+    （焊在 Arduino 端即可）
 ```
+
 Arduino IDE 需安裝 Library：**U8g2 by oliver**
+
+### OLED 雙螢幕說明
+| | OLED 1（文字） | OLED 2（波形） |
+|---|---|---|
+| I2C 模式 | 硬體 HW_I2C | 軟體 SW_I2C |
+| SCK | A5 | D6 |
+| SDA | A4 | D7 |
+| 地址 | 0x3C | 0x3C（不衝突） |
+| Python header | `0xFF 0xFE 0xFD` | `0xFF 0xFE 0xFC` |
+| 上拉電阻 | 延長時需要 | 不需要 |
+
+> 兩顆 OLED 均為 4 腳位（無 SA0），地址固定 0x3C。
+> OLED 2 改用軟體 I2C（D6/D7），與 OLED 1 走不同腳位，地址相同也不衝突。
 
 ### 微動開關邏輯說明
 - 掛架設計：掛鉤位置裝一顆微動開關，蓮蓬頭掛上時物理壓下開關
