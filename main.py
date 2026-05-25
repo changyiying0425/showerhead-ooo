@@ -389,13 +389,15 @@ def rms_to_oled_bytes(rms_history: list,
                     draw.ellipse([pcx - r, pcy - r, pcx + r, pcy + r], fill=1)
 
     else:
-        # ── 點陣波形；對話模式反色 ──
-        DOT        = 3          # 每個點 3×3 像素
-        CELL_W     = 5          # 欄寬（3px 點 + 2px 間距） → 25 欄
-        CELL_H     = 4          # 列高（3px 點 + 1px 間距） → 16 列
-        COLS       = 128 // CELL_W   # 25
-        ROWS       = 64  // CELL_H   # 16
-        SCALE_DOTS = 9.0        # rms 0.08 → ~11 點，rms 0.015 → ~2 點
+        # ── 中心對稱 halftone 波形；對話模式反色 ──
+        # 每欄從垂直中心向上下展開，中心點最大（r=2），邊緣漸小（r=1→0）
+        CELL_W  = 5             # 欄寬 → 25 欄
+        CELL_H  = 5             # 列高（正方格，圓點好看）→ 12 列
+        COLS    = 128 // CELL_W  # 25
+        ROWS    = 64  // CELL_H  # 12
+        CY      = ROWS // 2      # 6（垂直中心列）
+        DOT_MAX = 2              # 中心點半徑（像素）
+        SCALE   = 13.0           # rms 0.08 → half≈6（滿高），rms 0.015 → half≈1
 
         bg_color  = 1 if mode == "dialogue" else 0
         dot_color = 0 if mode == "dialogue" else 1
@@ -409,13 +411,18 @@ def rms_to_oled_bytes(rms_history: list,
             data.insert(0, 0.0)
 
         for col, rms_val in enumerate(data):
-            dots = min(int(rms_val * ROWS * SCALE_DOTS), ROWS)
-            x0 = col * CELL_W
-            x1 = x0 + DOT - 1
-            for row in range(dots):        # row=0 在底部，往上疊
-                y0 = 64 - (row + 1) * CELL_H
-                y1 = y0 + DOT - 1
-                draw.rectangle([x0, y0, x1, y1], fill=dot_color)
+            half = min(int(rms_val * CY * SCALE), CY)  # 向上/向下各幾列
+            if half == 0:
+                continue
+            px = col * CELL_W + CELL_W // 2   # 欄中心 x
+            for offset in range(-half, half + 1):
+                row = CY + offset
+                if 0 <= row < ROWS:
+                    py  = row * CELL_H + CELL_H // 2   # 列中心 y
+                    t   = 1.0 - abs(offset) / half      # 1.0（中心）→ 0（邊緣）
+                    r   = round(DOT_MAX * t)
+                    if r >= 1:
+                        draw.ellipse([px - r, py - r, px + r, py + r], fill=dot_color)
 
     pixels = np.array(img)
     buf = bytearray(1024)
@@ -637,7 +644,9 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
                         thinking_config=types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
-                return resp.text.strip()
+                result = resp.text.strip()
+                print(f"[Gemini 回覆] {result}")
+                return result
             except Exception as e:
                 err = str(e)
                 if "503" in err and attempt == 0:
@@ -701,6 +710,7 @@ def ask_gemini_audio_dialogue(audio: np.ndarray) -> str | None:
                     ),
                 )
                 result = resp.text.strip()
+                print(f"[Gemini 回覆] {result}")
 
                 # 更新對話歷史（user 用 [音訊] placeholder，model 用實際回應）
                 conversation_history.append(
