@@ -25,7 +25,8 @@ import pygame
 from PIL import Image, ImageDraw, ImageFont
 from google import genai
 from google.genai import types
-from elevenlabs.client import ElevenLabs
+import asyncio
+import edge_tts
 from flask import Flask, render_template, jsonify
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
@@ -54,7 +55,7 @@ VAD_MIN_SPEECH_CHUNKS  = 3     # 至少要有幾個 chunk 的語音才觸發（3
 VAD_DIALOGUE_SILENCE   = 30    # 對話模式靜音超過幾秒，主動開口
 VIZ_EMIT_EVERY         = 3     # 每幾個 chunk emit 一次 SocketIO（降低 lag）
 SPEAKING_COOLDOWN      = 0.5   # TTS 播完後靜音閘額外延遲（秒），讓喇叭尾音消散再開始收音
-ELEVENLABS_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
+EDGE_TTS_VOICE   = "zh-TW-HsiaoChenNeural"   # 台灣中文女聲
 FONT_PATH        = os.getenv("FONT_PATH", r"C:\Windows\Fonts\msjh.ttc")  # 微軟正黑體
 _mic_idx         = os.getenv("MIC_DEVICE_INDEX", "")
 MIC_DEVICE_INDEX = int(_mic_idx) if _mic_idx.strip() else None
@@ -233,7 +234,8 @@ ANCHOR_REMINDER = "（強制規則：回應必須在3到16個中文字之間，�
 
 gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
 
-eleven = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY", ""))
+async def _edge_tts_gen(text: str, path: str):
+    await edge_tts.Communicate(text, voice=EDGE_TTS_VOICE).save(path)
 
 pygame.mixer.init(frequency=44100)
 
@@ -474,46 +476,43 @@ def _apply_robot_effect(audio_bytes: bytes) -> bytes:
 
 
 # ═══════════════════════════════════════════════════
-#  語音合成（ElevenLabs → pygame 播放）
+#  語音合成（edge-tts → ring modulation → pygame 播放）
 # ═══════════════════════════════════════════════════
 
 def speak(text: str):
     global is_speaking
-    if not ELEVENLABS_VOICE:
-        print(f"[TTS] （無聲音 ID，略過）：{text}")
-        return
     try:
-        from elevenlabs import VoiceSettings
-        audio_gen  = eleven.text_to_speech.convert(
-            text=text,
-            voice_id=ELEVENLABS_VOICE,
-            model_id="eleven_multilingual_v2",
-            output_format="mp3_44100_128",
-            voice_settings=VoiceSettings(
-                stability=0.25,         # 低穩定性：聲音更粗糙、不均勻
-                similarity_boost=0.5,   # 降低相似度：帶更多雜質
-                style=0.4,              # 風格誇張化
-                use_speaker_boost=False,
-            ),
-        )
-        audio_bytes = b"".join(audio_gen)
-        audio_bytes = _apply_robot_effect(audio_bytes)
-
+        # ── edge-tts 合成 → 暫存 MP3 ──
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-            f.write(audio_bytes)
             tmp_path = f.name
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_edge_tts_gen(text, tmp_path))
+        finally:
+            loop.close()
 
-        is_speaking = True          # ── 開啟靜音閘，audio_loop 停止收音
+        # ── ring modulation ──
+        with open(tmp_path, "rb") as f:
+            raw = f.read()
+        audio_bytes = _apply_robot_effect(raw)
+        with open(tmp_path, "wb") as f:
+            f.write(audio_bytes)
+
+        # ── 播放 ──
+        is_speaking = True
         try:
             pygame.mixer.music.load(tmp_path)
             pygame.mixer.music.play()
             while pygame.mixer.music.get_busy():
                 time.sleep(0.05)
             pygame.mixer.music.unload()
-            os.unlink(tmp_path)
         finally:
-            time.sleep(SPEAKING_COOLDOWN)   # 等喇叭尾音消散
-            is_speaking = False     # ── 關閉靜音閘
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            time.sleep(SPEAKING_COOLDOWN)
+            is_speaking = False
     except Exception as e:
         print(f"[TTS] 錯誤：{e}")
         is_speaking = False
