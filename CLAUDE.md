@@ -587,6 +587,8 @@ SCL ─┤          ├─ 3.3V
 - 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
 - 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）
 - 麥克風：筆電為單一 TRRS combo 孔，TRRS 直插無聲；需透過 TRRS 轉雙 TRS 分接頭正常收音。喇叭改走 3.5mm 轉 USB 音效線，不佔 combo 孔
+- **MIC_DEVICE_INDEX**：`key.env` 設定 `MIC_DEVICE_INDEX=數字`（目前=1，對應 Microphone Realtek Audio）；裝置 index 會因 USB 插拔順序改變，跑 `test_mic.py` 重新確認。Windows 若自動停用麥克風裝置需手動到 mmsys.cpl 錄製分頁重新啟用
+- **麥克風增益設定**：Realtek Audio Console → Microphone (Realtek Audio) → 主音量拉滿、麥克風增益 +20dB、**AI降噪關閉**（AI降噪會削弱領夾麥克風訊號）。正常說話 rms ≈ 0.08，安靜背景 ≈ 0.005
 - 微動開關：D2（INPUT_PULLUP），COM→GND、NO→D2，80ms 軟體去彈跳，下降沿送 HANG\n
 - `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
 - **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作

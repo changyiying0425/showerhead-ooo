@@ -56,6 +56,8 @@ VIZ_EMIT_EVERY         = 3     # 每幾個 chunk emit 一次 SocketIO（降低 l
 SPEAKING_COOLDOWN      = 0.5   # TTS 播完後靜音閘額外延遲（秒），讓喇叭尾音消散再開始收音
 ELEVENLABS_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "")
 FONT_PATH        = os.getenv("FONT_PATH", r"C:\Windows\Fonts\msjh.ttc")  # 微軟正黑體
+_mic_idx         = os.getenv("MIC_DEVICE_INDEX", "")
+MIC_DEVICE_INDEX = int(_mic_idx) if _mic_idx.strip() else None
 DEBUG            = True     # 測試模式：印出 Gemini 聽到的內容（上線展覽前改為 False）
 
 # ═══════════════════════════════════════════════════
@@ -804,6 +806,7 @@ def audio_loop():
         stream = sd.InputStream(
             samplerate=SAMPLE_RATE, channels=1, dtype="float32",
             blocksize=CHUNK_SAMPLES,
+            device=MIC_DEVICE_INDEX,
             callback=_audio_input_callback,
         )
         stream.start()
