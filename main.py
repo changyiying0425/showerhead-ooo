@@ -55,7 +55,7 @@ VAD_MIN_SPEECH_CHUNKS  = 3     # 至少要有幾個 chunk 的語音才觸發（3
 VAD_DIALOGUE_SILENCE   = 30    # 對話模式靜音超過幾秒，主動開口
 VIZ_EMIT_EVERY         = 3     # 每幾個 chunk emit 一次 SocketIO（降低 lag）
 SPEAKING_COOLDOWN      = 0.5   # TTS 播完後靜音閘額外延遲（秒），讓喇叭尾音消散再開始收音
-EDGE_TTS_VOICE   = "zh-TW-HsiaoChenNeural"   # 台灣中文女聲
+EDGE_TTS_VOICE   = "zh-TW-HsiaoChenNeural"   # 台灣中文女聲，免費無配額
 FONT_PATH        = os.getenv("FONT_PATH", r"C:\Windows\Fonts\msjh.ttc")  # 微軟正黑體
 _mic_idx         = os.getenv("MIC_DEVICE_INDEX", "")
 MIC_DEVICE_INDEX = int(_mic_idx) if _mic_idx.strip() else None
@@ -345,10 +345,12 @@ def rms_to_oled_bytes(rms_history: list,
     根據狀態與模式，產生對應的 OLED2 視覺圖樣：
 
     - speaking（說話中）   → 黑底 + 七條漸寬橫線（喇叭放射圖案）
-    - processing（處理中） → 黑底 + 放射 halftone 呼吸動畫（中心大點，邊緣小點）
-    - dialogue（對話模式） → 白底 + 黑色點陣波形（反色，視覺上明顯變亮）
-    - ambient（環境音）    → 黑底 + 白色點陣波形（25欄 × 16列，每點 3×3px）
+    - dialogue（對話模式） → 白底 + 黑色 bar chart（反色，視覺上明顯變亮）
+    - ambient（環境音）    → 黑底 + 白色 bar chart（原有波形）
     """
+    SCALE    = 4.0
+    THRESH_Y = max(0, 63 - int(0.015 * 64 * SCALE))
+
     if state == "speaking":
         # ── 說話中：七條漸寬橫線，菱形放射，傳達「在說話」 ──
         img  = Image.new("1", (128, 64), 0)
@@ -362,67 +364,29 @@ def rms_to_oled_bytes(rms_history: list,
         # 中心實心圓點
         draw.ellipse([cx - 3, 29, cx + 3, 35], fill=1)
 
-    elif state == "processing":
-        # ── 處理中：放射 halftone 呼吸動畫 ──
-        # 中心最大點（~3px），越外面越小，整體隨時間呼吸縮放
-        pulse  = 0.3 + 0.7 * (float(np.sin(time.time() * np.pi * 2 / 2.0)) * 0.5 + 0.5)
-        # pulse 範圍 0.3（最小）~ 1.0（最大），週期 2 秒
-
-        img  = Image.new("1", (128, 64), 0)
-        draw = ImageDraw.Draw(img)
-
-        cx, cy = 63.5, 31.5   # 畫面中心
-        GRID   = 8             # 每格 8px → 16欄 × 8列 = 128 個點
-        MAX_R  = 3.5           # 中心最大點半徑（像素）
-        SIGMA2 = 2000.0        # 高斯衰減：dist≈50px → r≈1.0，dist≈65px → 消失
-
-        for row in range(8):
-            for col in range(16):
-                pcx  = col * GRID + GRID // 2   # 4, 12, 20 … 124
-                pcy  = row * GRID + GRID // 2   # 4, 12, 20 … 60
-                dx   = pcx - cx
-                dy   = pcy - cy
-                dist2   = dx * dx + dy * dy
-                falloff = float(np.exp(-dist2 / SIGMA2))
-                r = MAX_R * falloff * pulse
-                if r >= 0.5:
-                    draw.ellipse([pcx - r, pcy - r, pcx + r, pcy + r], fill=1)
-
     else:
-        # ── 中心對稱 halftone 波形；對話模式反色 ──
-        # 每欄從垂直中心向上下展開，中心點最大（r=2），邊緣漸小（r=1→0）
-        CELL_W  = 5             # 欄寬 → 25 欄
-        CELL_H  = 5             # 列高（正方格，圓點好看）→ 12 列
-        COLS    = 128 // CELL_W  # 25
-        ROWS    = 64  // CELL_H  # 12
-        CY      = ROWS // 2      # 6（垂直中心列）
-        DOT_MAX = 2              # 中心點半徑（像素）
-        SCALE   = 13.0           # rms 0.08 → half≈6（滿高），rms 0.015 → half≈1
-
+        # ── 波形 bar chart；對話模式反色 ──
         bg_color  = 1 if mode == "dialogue" else 0
-        dot_color = 0 if mode == "dialogue" else 1
+        bar_color = 0 if mode == "dialogue" else 1
+        thr_color = 0 if mode == "dialogue" else 1
 
         img  = Image.new("1", (128, 64), bg_color)
         draw = ImageDraw.Draw(img)
 
-        # 取最近 COLS 筆資料，不足則補 0
-        data = list(rms_history[-COLS:])
-        while len(data) < COLS:
-            data.insert(0, 0.0)
+        data  = rms_history[-128:]
+        n     = len(data)
+        bar_w = max(1, 128 // n) if n else 1
 
-        for col, rms_val in enumerate(data):
-            half = min(int(rms_val * CY * SCALE), CY)  # 向上/向下各幾列
-            if half == 0:
-                continue
-            px = col * CELL_W + CELL_W // 2   # 欄中心 x
-            for offset in range(-half, half + 1):
-                row = CY + offset
-                if 0 <= row < ROWS:
-                    py  = row * CELL_H + CELL_H // 2   # 列中心 y
-                    t   = 1.0 - abs(offset) / half      # 1.0（中心）→ 0（邊緣）
-                    r   = round(DOT_MAX * t)
-                    if r >= 1:
-                        draw.ellipse([px - r, py - r, px + r, py + r], fill=dot_color)
+        for i, rms in enumerate(data):
+            bar_h = min(int(rms * 64 * SCALE), 62)
+            if bar_h == 0 and rms > 0:
+                bar_h = 1
+            x0 = i * bar_w
+            x1 = min(x0 + bar_w - 1, 127)
+            draw.rectangle([x0, 63 - bar_h, x1, 63], fill=bar_color)
+
+        # 門檻線
+        draw.line([(0, THRESH_Y), (127, THRESH_Y)], fill=thr_color)
 
     pixels = np.array(img)
     buf = bytearray(1024)
@@ -489,7 +453,6 @@ def _apply_robot_effect(audio_bytes: bytes) -> bytes:
 def speak(text: str):
     global is_speaking
     try:
-        # ── edge-tts 合成 → 暫存 MP3 ──
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
             tmp_path = f.name
         loop = asyncio.new_event_loop()
@@ -498,14 +461,12 @@ def speak(text: str):
         finally:
             loop.close()
 
-        # ── ring modulation ──
         with open(tmp_path, "rb") as f:
             raw = f.read()
         audio_bytes = _apply_robot_effect(raw)
         with open(tmp_path, "wb") as f:
             f.write(audio_bytes)
 
-        # ── 播放 ──
         is_speaking = True
         try:
             pygame.mixer.music.load(tmp_path)
