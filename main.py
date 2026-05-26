@@ -526,7 +526,7 @@ def send_to_oled2(bitmap: bytearray):
 
 
 def oled2_loop():
-    """獨立執行緒：每 0.15 秒讀取 oled2_state，送出波形點陣圖到 OLED 2。"""
+    """獨立執行緒：以 BMAP_OK 流控自然限速，送出波形點陣圖到 OLED 2。"""
     arduino_ready.wait()  # 等 Arduino 初始化完成再開始
     while True:
         try:
@@ -538,7 +538,7 @@ def oled2_loop():
             send_to_oled2(bmp)
         except Exception as e:
             print(f"[OLED2] 更新錯誤：{e}")
-        time.sleep(0.15)
+        time.sleep(0.01)  # 讓 OLED1 有機會拿鎖；實際限速由 BMAP_OK 決定（硬體上限 ~6Hz）
 
 # ═══════════════════════════════════════════════════
 #  Anti-repeat hint（傳給所有 Gemini 呼叫）

@@ -554,7 +554,7 @@ SCL ─┤          ├─ 3.3V
 - [x] **conversation_history 存真實文字** — 對話模式並行送出轉錄＋回應兩個 API call（2026-05-26）
 - [x] **展覽用喇叭**（3.5mm 直插喇叭 + 3.5mm 轉 USB 音效線，2026-05-25 測試正常）
 - [x] **對話模式 lock 問題** — 設計決定：維持現狀（處理中音訊全部丟棄），節奏感為「說話→等待→再說話」
-- [x] **OLED2 刷新平順化** — `oled2_loop` 更新間隔從 0.5s 縮至 0.15s（2026-05-27）
+- [x] **OLED2 刷新加速** — `oled2_loop` sleep 0.5s→0.15s→0.01s；實際限速由 BMAP_OK 流控決定，硬體上限約 6Hz（serial 89ms + SW I2C ~80ms）（2026-05-27）
 - [x] **OLED1 啟動污染修復** — 根因：SW I2C OLED2 初始化耗時 3–4s，Arduino `setup()` 未完成前 Python 已送 bitmap，UART buffer 溢位後殘留 bytes 被錯誤路由至 OLED1。修法：`time.sleep(2)→5`；`arduino_ready` event 確保 `oled2_loop` 等 Arduino 就緒後再啟動（2026-05-27）
 - [ ] **採購展場佈線延長元件** — 4.7kΩ 電阻 × 2、USB A公對A母延長線（150cm+）、3.5mm 公對母延長線（150cm+）× 1、TRS 公對母延長線（150cm+）× 2
 - [ ] **焊接 OLED I2C 延長線 + 加裝上拉電阻** — SDA 與 3.3V 之間接 4.7kΩ、SCL 與 3.3V 之間接 4.7kΩ
@@ -602,7 +602,7 @@ SCL ─┤          ├─ 3.3V
 - **2026-05-27**：對話模式 lock 設計決定：處理中音訊全部丟棄（維持慢節奏互動感）
 - **2026-05-27**：viz.html processing 狀態改為放射狀 halftone 圓形呼吸動畫
 - **2026-05-27**：viz.html speaking 狀態改為水波漂浮光點動畫（4 個漂移波源 + 漣漪）
-- **2026-05-27**：OLED2 刷新間隔 0.5s → 0.15s（oled2_loop）
+- **2026-05-27**：OLED2 刷新間隔 0.5s → 0.15s → 0.01s（oled2_loop sleep，實際上限由 BMAP_OK 流控決定 ~6Hz）
 - **2026-05-27**：OLED1 啟動污染修復：`time.sleep(2→5)` + `arduino_ready` event；`oled2_loop` 等 Arduino 就緒後才啟動，初始化改為 inline BMAP_OK 讀取（避免 event deadlock）
 
-*最後更新：2026-05-27（OLED1 啟動污染修復）*
+*最後更新：2026-05-27（OLED2 刷新加速至硬體上限）*
