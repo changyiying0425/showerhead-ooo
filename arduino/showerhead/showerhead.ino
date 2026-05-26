@@ -3,8 +3,8 @@
 //
 // 接線：
 //   FSR  → A0（另一端接 3.3V，A0 與 GND 之間接 10kΩ）
-//   OLED 1（文字）GND/VCC/SCK/SDA → GND/3.3V/A5/A4，I2C 位址 0x3C（SA0 接 GND）
-//   OLED 2（波形）GND/VCC/SCK/SDA → GND/3.3V/A5/A4，I2C 位址 0x3D（SA0 接 VCC）
+//   OLED 1（文字）GND/VCC/SCK/SDA → GND/3.3V/A5/A4，硬體 I2C，位址 0x3C
+//   OLED 2（波形）GND/VCC/SCK/SDA → GND/3.3V/D6/D7，軟體 I2C，位址 0x3C（不衝突）
 //   微動開關 COM → GND，NO → D2（INPUT_PULLUP）
 //
 // 需要安裝的 Library（Arduino IDE → Library Manager）：
@@ -20,8 +20,8 @@
 // OLED 1（文字回應）：I2C 預設位址 0x3C
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
-// OLED 2（音訊波形）：1.3吋 SH1106，I2C 位址 0x3D（SA0 腳接 VCC）
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2b(U8G2_R0, U8X8_PIN_NONE);
+// OLED 2（音訊波形）：軟體 I2C，D6=SCK，D7=SDA，位址 0x3C（與 OLED1 不同匯流排，不衝突）
+U8G2_SH1106_128X64_NONAME_F_SW_I2C u8g2b(U8G2_R0, 6, 7, U8X8_PIN_NONE);
 
 const int FSR_PIN       = A0;
 const int FSR_THRESHOLD = 200;
@@ -37,7 +37,7 @@ unsigned long lastSwitchMs = 0;
 const unsigned long DEBOUNCE_MS = 80;
 
 // ── 接收 bitmap 並顯示到指定 OLED ──────────────────────────
-void receiveBitmapToOled(U8G2_SH1106_128X64_NONAME_F_HW_I2C& oled) {
+void receiveBitmapToOled(U8G2& oled) {
   uint8_t* buf = oled.getBufferPtr();
   int received = 0;
   unsigned long t0 = millis();
@@ -67,8 +67,7 @@ void setup() {
   u8g2.drawStr(50, 36, "...");
   u8g2.sendBuffer();
 
-  // OLED 2（0x3D，SA0 接 VCC → setI2CAddress 0x3D<<1 = 0x7A）
-  u8g2b.setI2CAddress(0x7A);
+  // OLED 2（軟體 I2C，D6/D7，位址 0x3C，與 OLED1 不同匯流排不衝突）
   u8g2b.begin();
   u8g2b.clearBuffer();
   u8g2b.sendBuffer();  // 初始全黑，等 Python 送波形

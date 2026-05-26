@@ -116,7 +116,7 @@
     const W = canvas.width, H = canvas.height;
 
     const HISTORY   = 140;   // ~14 秒歷史（每 0.3s 一格）
-    const THRESHOLD = 0.015;
+    let   THRESHOLD = 0.030; // 由 server 動態更新，與 VAD_SPEECH_THRESHOLD 同步
     const SCALE     = 5.5;
 
     let history     = new Array(HISTORY).fill(0);
@@ -186,6 +186,12 @@
       const mode     = data.mode     ?? 'ambient';
       const state    = data.state    ?? 'waiting';
       const progress = data.progress ?? 0;
+
+      // 同步門檻（與 main.py VAD_SPEECH_THRESHOLD 保持一致）
+      if (data.threshold !== undefined) {
+        THRESHOLD = data.threshold;
+        document.getElementById('thresh-label').textContent = `rms ${THRESHOLD.toFixed(3)}`;
+      }
 
       history.push(rms);
       if (history.length > HISTORY) history.shift();

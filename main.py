@@ -43,7 +43,7 @@ if _ffmpeg_dir and _ffmpeg_dir not in os.environ.get("PATH", ""):
 #  設定
 # ═══════════════════════════════════════════════════
 
-SERIAL_PORT      = os.getenv("SERIAL_PORT", "COM3")
+SERIAL_PORT      = os.getenv("SERIAL_PORT", "COM7")
 BAUD_RATE        = 115200
 SAMPLE_RATE      = 44100
 AMBIENT_SECONDS        = 5     # 環境音模式：每幾秒分析一次（縮短以降低延遲）
@@ -52,10 +52,11 @@ MONOLOGUE_INTERVAL     = 30    # 安靜時自言自語之間的間隔（秒）
 VAD_CHUNK_SECONDS      = 0.1   # 每次音訊片段長度（秒）
 VAD_SILENCE_CHUNKS     = 6     # 靜音超過幾個 chunk 視為句尾（600ms）
 VAD_MIN_SPEECH_CHUNKS  = 3     # 至少要有幾個 chunk 的語音才觸發（300ms）
+VAD_MAX_SPEECH_CHUNKS  = 50    # 語音超過幾個 chunk 強制切段（5 秒，避免背景噪音讓句子無限累積）
 VAD_DIALOGUE_SILENCE   = 30    # 對話模式靜音超過幾秒，主動開口
 VIZ_EMIT_EVERY         = 3     # 每幾個 chunk emit 一次 SocketIO（降低 lag）
 SPEAKING_COOLDOWN      = 0.5   # TTS 播完後靜音閘額外延遲（秒），讓喇叭尾音消散再開始收音
-VAD_SPEECH_THRESHOLD   = 0.030 # 語音偵測門檻（背景噪音~0.017，說話~0.08，取中間）
+VAD_SPEECH_THRESHOLD   = 0.100 # 語音偵測門檻（2026-05-26 實測：背景~0.039，說話~0.283）
 EDGE_TTS_VOICE   = "zh-TW-HsiaoChenNeural"   # 台灣中文女聲，免費無配額
 FONT_PATH        = os.getenv("FONT_PATH", r"C:\Windows\Fonts\msjh.ttc")  # 微軟正黑體
 _mic_idx         = os.getenv("MIC_DEVICE_INDEX", "")
@@ -262,9 +263,13 @@ last_monologue_time     = 0.0         # 上一次自言自語的時間
 dialogue_processing     = False       # 是否正在處理對話（防止重疊）
 ambient_processing      = False       # 是否正在處理環境音（背景執行緒）
 last_response           = ""          # 上一句蓮蓬頭說的話（避免重複句型）
+recent_responses        = []          # 最近 5 句回應（anti-repeat 用，不隨 HANG 清除）
+MAX_RECENT              = 5           # 保留幾句
 audio_queue             = queue.Queue(maxsize=300)  # PortAudio callback → 消費端
 oled_send_lock          = threading.Lock()          # 防止兩顆 OLED 同時寫 Serial
+oled_ack                = threading.Event()         # Arduino 回 BMAP_OK 時 set，send 函式等到再放鎖
 is_speaking             = False                     # TTS 播放中旗標（靜音閘，避免麥克風收到自己的聲音）
+oled2_state             = {"rms_history": [], "display_state": "waiting", "mode": "ambient"}  # OLED2 共享狀態
 
 # ═══════════════════════════════════════════════════
 #  OLED 點陣圖產生（PIL → U8g2 頁格式）
@@ -330,8 +335,11 @@ def send_to_oled(text: str):
         with oled_send_lock:
             try:
                 bitmap = text_to_oled_bytes(text)
+                oled_ack.clear()
                 arduino.write(bytes([0xFF, 0xFE, 0xFD]) + bitmap)
                 arduino.flush()
+                if not oled_ack.wait(timeout=2.0):
+                    print("[OLED] 等待 BMAP_OK 逾時")
                 print(f"[OLED] 傳送：{text[:30]}")
             except Exception as e:
                 print(f"[OLED] 傳送失敗：{e}")
@@ -408,10 +416,41 @@ def send_to_oled2(bitmap: bytearray):
     if arduino and arduino.is_open:
         with oled_send_lock:
             try:
+                oled_ack.clear()
                 arduino.write(bytes([0xFF, 0xFE, 0xFC]) + bitmap)
                 arduino.flush()
+                if not oled_ack.wait(timeout=2.0):
+                    print("[OLED2] 等待 BMAP_OK 逾時")
             except Exception as e:
                 print(f"[OLED2] 傳送失敗：{e}")
+
+
+def oled2_loop():
+    """獨立執行緒：每 0.5 秒讀取 oled2_state，送出波形點陣圖到 OLED 2。"""
+    while True:
+        try:
+            bmp = rms_to_oled_bytes(
+                oled2_state["rms_history"],
+                oled2_state["display_state"],
+                oled2_state["mode"],
+            )
+            send_to_oled2(bmp)
+        except Exception as e:
+            print(f"[OLED2] 更新錯誤：{e}")
+        time.sleep(0.5)
+
+# ═══════════════════════════════════════════════════
+#  Anti-repeat hint（傳給所有 Gemini 呼叫）
+# ═══════════════════════════════════════════════════
+
+def _anti_repeat_hint() -> str:
+    """回傳最近說過的句子清單，要求 Gemini 這次必須說不同的話。"""
+    if not recent_responses:
+        return ""
+    items = "、".join(f"「{r}」" for r in recent_responses)
+    return (f"（你最近說過這些句子：{items}。"
+            f"這次必須說一句完全不同的話——不同句型、不同開頭詞、不同內容，不能重複以上任何一句。）")
+
 
 # ═══════════════════════════════════════════════════
 #  機械感音效處理（Ring Modulation）
@@ -491,11 +530,19 @@ def speak(text: str):
 # ═══════════════════════════════════════════════════
 
 def respond(text: str):
-    global last_response
+    global last_response, recent_responses
+    if not text:
+        return
     with response_lock:
+        send_to_oled(text)               # 永遠先更新 OLED1
+        if text == last_response:
+            print(f"[重複] TTS 跳過：{text}")
+            return                       # OLED 已更新，只跳過 TTS
         last_response = text
+        recent_responses.append(text)
+        if len(recent_responses) > MAX_RECENT:
+            recent_responses.pop(0)
         print(f"\n蓮蓬頭：{text}\n")
-        send_to_oled(text)
         speak(text)
 
 # ═══════════════════════════════════════════════════
@@ -506,7 +553,7 @@ def ask_gemini(prompt: str, use_history: bool = False) -> str | None:
     """文字 prompt → Gemini，可選帶入對話歷史。"""
     global conversation_history
 
-    user_text = f"{ANCHOR_REMINDER}\n{prompt}"
+    user_text = f"{ANCHOR_REMINDER}{_anti_repeat_hint()}\n{prompt}"
 
     # 對話模式帶入歷史，環境音模式單次呼叫
     if use_history and conversation_history:
@@ -573,11 +620,9 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
         print(f"[Gemini Audio] 音訊轉換失敗：{e}")
         return None
 
-    anti_repeat = (f"（上一句說的是「{last_response}」，這次必須換不同句型和開頭詞。）"
-                   if last_response else "")
     parts = [
         {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}},
-        {"text": ANCHOR_REMINDER + anti_repeat},
+        {"text": ANCHOR_REMINDER + _anti_repeat_hint()},
     ]
 
     # DEBUG 模式：先問 Gemini 聽到了什麼
@@ -626,9 +671,12 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
 
 def ask_gemini_audio_dialogue(audio: np.ndarray) -> str | None:
     """
-    對話模式專用：音訊直送 Gemini，同時帶入 conversation_history。
-    取代原本的 transcribe_audio() + ask_gemini() 兩次 API 呼叫，降低延遲。
+    對話模式專用：轉錄 + 回應 並行送出，延遲與單次 call 相同。
+      - 轉錄 call：純文字，不帶 system prompt，結果存入 conversation_history
+      - 回應 call：帶 system prompt + history + 音訊，產生蓮蓬頭回應
+    兩個 call 同時發出，取較慢者的時間，不互相阻塞。
     """
+    import concurrent.futures
     global conversation_history
 
     try:
@@ -640,94 +688,76 @@ def ask_gemini_audio_dialogue(audio: np.ndarray) -> str | None:
 
     audio_inline = {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}}
 
-    # DEBUG：先問 Gemini 聽到了什麼
-    if DEBUG:
+    # ── 轉錄 call（無 system prompt）──
+    def _transcribe():
         try:
-            debug_resp = gemini.models.generate_content(
+            t_resp = gemini.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=[{"role": "user", "parts": [
                     audio_inline,
-                    {"text": "這段音訊裡的人說了什麼？一句話描述。"},
+                    {"text": "這段音訊裡的人說了什麼？請只輸出說話的文字內容，沒有人說話就輸出空字串。"},
                 ]}],
             )
-            print(f"[VAD 聽到] {debug_resp.text.strip()}")
+            return t_resp.text.strip()
         except Exception as e:
-            print(f"[VAD 聽到] 失敗：{e}")
+            if DEBUG:
+                print(f"[VAD 聽到] 轉錄失敗：{e}")
+            return ""
 
-    # 當前輪次：歷史（text）+ 本次音訊
+    # ── 回應 call（帶 system prompt + history）──
     melody_hint = "（重要：若音訊中有旋律感或唱歌，請以聲音特質回應，例如好不好聽、聲音高低，不要翻譯或引用歌詞內容。）"
-    current_parts = [{"text": ANCHOR_REMINDER + melody_hint}, audio_inline]
+    current_parts = [{"text": ANCHOR_REMINDER + melody_hint + _anti_repeat_hint()}, audio_inline]
     contents = (conversation_history + [{"role": "user", "parts": current_parts}]
                 if conversation_history else [{"role": "user", "parts": current_parts}])
 
-    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-        for attempt in range(2):
-            try:
-                resp = gemini.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
-                )
-                result = resp.text.strip()
-                print(f"[Gemini 回覆] {result}")
+    def _respond():
+        for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+            for attempt in range(2):
+                try:
+                    resp = gemini.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            thinking_config=types.ThinkingConfig(thinking_budget=0),
+                        ),
+                    )
+                    return resp.text.strip()
+                except Exception as e:
+                    err = str(e)
+                    if "503" in err and attempt == 0:
+                        print(f"[VAD] {model} 503，2 秒後重試...")
+                        time.sleep(2)
+                    else:
+                        print(f"[VAD] {model} 錯誤：{e}")
+                        break
+        return None
 
-                # 更新對話歷史（user 用 [音訊] placeholder，model 用實際回應）
-                conversation_history.append(
-                    {"role": "user", "parts": [{"text": f"{ANCHOR_REMINDER}\n[音訊輸入]"}]}
-                )
-                conversation_history.append(
-                    {"role": "model", "parts": [{"text": result}]}
-                )
-                return result
-            except Exception as e:
-                err = str(e)
-                if "503" in err and attempt == 0:
-                    print(f"[VAD] {model} 503，2 秒後重試...")
-                    time.sleep(2)
-                else:
-                    print(f"[VAD] {model} 錯誤：{e}")
-                    break
-    return None
+    # ── 並行執行，等兩個都完成 ──
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        future_t = executor.submit(_transcribe)
+        future_r = executor.submit(_respond)
+        transcribed = future_t.result()
+        result     = future_r.result()
 
+    if DEBUG:
+        print(f"[VAD 聽到] {transcribed}" if transcribed else "[VAD 聽到] 沒有說話")
 
-# ═══════════════════════════════════════════════════
-#  VAD 對話模式：音訊轉錄 + 處理
-# ═══════════════════════════════════════════════════
+    if not result:
+        print("[VAD] 無回應")
+        return None
 
-def transcribe_audio(audio: np.ndarray) -> str:
-    """將音訊送 Gemini，純粹轉錄成文字（無 system prompt，無個性）。"""
-    try:
-        wav_bytes = numpy_to_wav_bytes(audio)
-        audio_b64 = base64.b64encode(wav_bytes).decode()
-    except Exception as e:
-        print(f"[VAD] 音訊轉換失敗：{e}")
-        return ""
+    print(f"[Gemini 回覆] {result}")
 
-    parts = [
-        {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}},
-        {"text": "這段音訊裡的人說了什麼？請只輸出說話的文字內容，沒有人說話就輸出空字串。"},
-    ]
-
-    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-        for attempt in range(2):
-            try:
-                resp = gemini.models.generate_content(
-                    model=model,
-                    contents=[{"role": "user", "parts": parts}],
-                )
-                return resp.text.strip()
-            except Exception as e:
-                err = str(e)
-                if "503" in err and attempt == 0:
-                    print(f"[VAD] {model} 503，2 秒後重試...")
-                    time.sleep(2)
-                else:
-                    print(f"[VAD] {model} 錯誤：{e}")
-                    break
-    return ""
+    # history：user 存轉錄文字（失敗時 fallback 到 [音訊輸入]）
+    history_user = transcribed if transcribed else "[音訊輸入]"
+    conversation_history.append(
+        {"role": "user", "parts": [{"text": f"{ANCHOR_REMINDER}\n{history_user}"}]}
+    )
+    conversation_history.append(
+        {"role": "model", "parts": [{"text": result}]}
+    )
+    return result
 
 
 def _process_ambient(audio: np.ndarray):
@@ -791,16 +821,15 @@ def audio_loop():
     vad_silence_count = 0
     vad_in_speech     = False
     last_speech_time  = time.time()   # 對話模式：最近偵測到語音的時間
+    vad_debug_count   = 0             # 對話模式 debug print 計數
 
     prev_mode = mode
 
     # ── SocketIO viz emit 計數 ──
     viz_chunk_count = 0
 
-    # ── OLED 2 波形更新 ──
+    # ── OLED 2 波形更新（rms 歷史由此維護，狀態寫入 oled2_state）──
     rms_history_oled2 = []   # 最多保留 128 筆
-    oled2_chunk_count = 0
-    OLED2_UPDATE_EVERY = 5   # 每 5 chunk（0.5 秒）更新一次
 
     try:
         stream = sd.InputStream(
@@ -852,29 +881,22 @@ def audio_loop():
                 viz_chunk_count = 0
                 try:
                     socketio.emit("audio_level", {
-                        "rms":      round(chunk_rms, 4),
-                        "mode":     current_mode,
-                        "state":    display_state,
-                        "progress": viz_progress,
+                        "rms":       round(chunk_rms, 4),
+                        "mode":      current_mode,
+                        "state":     display_state,
+                        "progress":  viz_progress,
+                        "threshold": VAD_SPEECH_THRESHOLD,
                     })
                 except Exception:
                     pass   # 無客戶端連線時忽略
 
-            # ── OLED 2：累積 RMS，每 0.5 秒更新一次；傳入狀態控制圖樣 ──
+            # ── OLED 2：更新共享狀態（由 oled2_loop 執行緒每 0.5 秒讀取）──
             rms_history_oled2.append(chunk_rms)
             if len(rms_history_oled2) > 128:
                 rms_history_oled2.pop(0)
-            oled2_chunk_count += 1
-            if oled2_chunk_count >= OLED2_UPDATE_EVERY:
-                oled2_chunk_count = 0
-                _hist  = list(rms_history_oled2)   # 快照，避免執行緒衝突
-                _state = display_state
-                _mode  = current_mode
-                threading.Thread(
-                    target=lambda h, s, m: send_to_oled2(rms_to_oled_bytes(h, s, m)),
-                    args=(_hist, _state, _mode),
-                    daemon=True,
-                ).start()
+            oled2_state["rms_history"]    = list(rms_history_oled2)
+            oled2_state["display_state"]  = display_state
+            oled2_state["mode"]           = current_mode
 
             # ────────── 偵測模式切換 ──────────
             if current_mode != prev_mode:
@@ -955,12 +977,35 @@ def audio_loop():
 
                 rms = float(np.sqrt(np.mean(chunk ** 2)))
 
+                # ── 對話模式 rms 每 0.5 秒印一次 ──
+                vad_debug_count += 1
+                if vad_debug_count >= 5:
+                    vad_debug_count = 0
+                    label = "語音" if rms >= VAD_SPEECH_THRESHOLD else "靜音"
+                    speech_str = f"（已收{len(speech_chunks)}chunk）" if vad_in_speech else ""
+                    print(f"[對話] rms={rms:.4f}  {label}  門檻={VAD_SPEECH_THRESHOLD}{speech_str}")
+
                 if rms >= VAD_SPEECH_THRESHOLD:
                     # 有語音
+                    if not vad_in_speech:
+                        print(f"[VAD] 語音開始  rms={rms:.4f}")
                     speech_chunks.append(chunk)
                     vad_silence_count = 0
                     vad_in_speech     = True
                     last_speech_time  = time.time()
+
+                    # 強制切段：避免背景噪音讓句子無限累積
+                    if len(speech_chunks) >= VAD_MAX_SPEECH_CHUNKS:
+                        print(f"[VAD] 達最大長度 {VAD_MAX_SPEECH_CHUNKS} chunks（5秒），強制切段送出")
+                        audio_seg = np.concatenate(speech_chunks)
+                        threading.Thread(
+                            target=_process_dialogue,
+                            args=(audio_seg,),
+                            daemon=True,
+                        ).start()
+                        speech_chunks     = []
+                        vad_silence_count = 0
+                        vad_in_speech     = False
                 else:
                     # 靜音
                     if vad_in_speech:
@@ -970,12 +1015,15 @@ def audio_loop():
                         if vad_silence_count >= VAD_SILENCE_CHUNKS:
                             # 靜音超過 800ms → 句尾
                             if len(speech_chunks) >= VAD_MIN_SPEECH_CHUNKS:
+                                print(f"[VAD] 句尾切段，共 {len(speech_chunks)} chunks，送出處理")
                                 audio_seg = np.concatenate(speech_chunks)
                                 threading.Thread(
                                     target=_process_dialogue,
                                     args=(audio_seg,),
                                     daemon=True,
                                 ).start()
+                            else:
+                                print(f"[VAD] 語音太短（{len(speech_chunks)} chunks < {VAD_MIN_SPEECH_CHUNKS}），忽略")
                             # 不管有無達門檻都重置
                             speech_chunks     = []
                             vad_silence_count = 0
@@ -1030,7 +1078,9 @@ def arduino_loop():
                 elif line == "HANG":
                     _reset_conversation()
                 elif line.startswith("BMAP"):
-                    print(f"[OLED] Arduino 回報：{line}")
+                    if line != "BMAP_OK":   # 只印錯誤（BMAP_TIMEOUT），正常 OK 不印
+                        print(f"[OLED] Arduino 回報：{line}")
+                    oled_ack.set()   # 通知 send_to_oled / send_to_oled2 放鎖
         except Exception as e:
             print(f"[Arduino] 讀取錯誤：{e}")
             time.sleep(1)
@@ -1088,16 +1138,6 @@ def trigger_scan():
                     "message": "請查看終端機視窗進行審核"})
 
 
-@socketio.on("transcript")
-def on_transcript(data):
-    text = data.get("text", "").strip()
-    if not text or mode != "dialogue":
-        return
-    print(f"觀眾說：{text}")
-    ans = ask_gemini(text, use_history=True)   # 對話模式帶入記憶
-    if ans:
-        respond(ans)
-
 # ═══════════════════════════════════════════════════
 #  主程式入口
 # ═══════════════════════════════════════════════════
@@ -1107,7 +1147,7 @@ if __name__ == "__main__":
     print("  蓮蓬頭 — OOO 互動裝置  啟動中...")
     print("=" * 45)
 
-    for target in (arduino_loop, audio_loop):
+    for target in (arduino_loop, audio_loop, oled2_loop):
         t = threading.Thread(target=target, daemon=True)
         t.start()
 

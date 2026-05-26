@@ -77,7 +77,7 @@
 觀者拿起蓮蓬頭 → 微動開關 OFF（觸發拿起事件）
 → 觀者手碰觸 FSR → Arduino 送 HOLD\n → Python 進入對話模式
   → VAD 靜音偵測切段 → 音訊直送 Gemini multimodal
-  → Gemini 回應 → OLED 顯示 + ElevenLabs TTS → 喇叭
+  → Gemini 回應 → OLED 顯示 + Edge TTS → ring modulation → Voicemeeter → 喇叭
   → 觀者手離開 FSR → Arduino 送 RELEASE\n → 回到環境音模式
 → 觀者掛回蓮蓬頭 → 微動開關 ON → Arduino 送 HANG\n
   → Python 清除此段對話記憶（conversation_history）
@@ -89,9 +89,9 @@
 **模式一：環境音模式（預設，FSR 未觸發）**
 ```
 麥克風 → Gemini multimodal 音訊輸入（直接傳音訊片段）
-→ 每10秒分析一次，有明顯聲音（rms ≥ 0.015）才觸發
+→ 每5秒分析一次，有明顯聲音（rms ≥ 0.100）才觸發
 → Gemini API（蓮蓬頭個性回應）
-→ OLED 顯示文字 + ElevenLabs TTS → Voicemeeter → 喇叭
+→ OLED 顯示文字 + Edge TTS → ring modulation → Voicemeeter → 喇叭
 超過5分鐘安靜 → 自言自語三次（每30秒一次）後重置
 ```
 ✅ 已實作：`ask_gemini_audio()` 直接送音訊片段，Gemini 自行判斷聲音內容。
@@ -100,19 +100,20 @@
 ```
 FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 → PortAudio InputStream 持續收音（0.1s chunks）
-→ RMS VAD：語音 rms≥0.015，靜音超過 800ms → 句尾切段
-→ transcribe_audio(audio) → Gemini 純轉錄（無 system prompt）
-→ ask_gemini(text, use_history=True) → 帶入 conversation_history
-→ Gemini 回應（蓮蓬頭個性）→ OLED 顯示文字 + ElevenLabs TTS → 喇叭
+→ RMS VAD：語音 rms≥0.100，靜音超過 600ms → 句尾切段
+→ ask_gemini_audio_dialogue(audio)：
+    ├─ [並行] 轉錄 call → Gemini 純轉錄（存入 conversation_history）
+    └─ [並行] 回應 call → Gemini 帶 system prompt + history 回應
+→ Gemini 回應（蓮蓬頭個性）→ OLED 顯示文字 + Edge TTS → ring modulation → 喇叭
 → FSR RELEASE → 回到環境音模式
 → 30 秒無語音 → 主動開口
 ```
-✅ 已實作（2026-05-24）：`audio_loop()` 統一處理環境音與對話 VAD，不再需要 Chrome Web Speech API。
+✅ 已實作：`ask_gemini_audio_dialogue()` 並行送出轉錄＋回應兩個 call，延遲與單次相同，history 存真實文字。
 
 **模式三：重置模式（蓮蓬頭掛回時）**
 ```
 微動開關 ON → Arduino 送 HANG\n → Python 清除 conversation_history
-→ 重置 session_log → 回到環境音模式待機
+→ 回到環境音模式待機
 ```
 > 作用：每位觀眾的對話記憶在物理動作（掛回）時清除，避免跨觀眾對話跑偏。每次對話都是全新開始。
 
@@ -124,16 +125,18 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 | Arduino Nano | 讀取微動開關 + FSR、驅動兩顆 OLED、傳訊號給 Python |
 | 麥克風 | 收環境音及觀眾說話聲音 |
 | Python（main.py） | 整個系統的大腦，串聯所有服務，管理對話記憶 |
-| VAD（RMS 靜音偵測） | 對話模式中偵測句尾（靜音 > 800ms），切出音訊片段；PortAudio InputStream 統一收音 |
+| VAD（RMS 靜音偵測） | 對話模式中偵測句尾（靜音 > 600ms），切出音訊片段；PortAudio InputStream 統一收音 |
 | Gemini multimodal API | 直接分析音訊內容，產生蓮蓬頭個性回應（取代 librosa + Web Speech） |
-| ElevenLabs | 文字轉語音 |
+| Edge TTS | 文字轉語音（`zh-TW-HsiaoChenNeural`，免費無配額） |
+| Ring modulation | Python 播出前套用（60Hz 載波，depth=0.55），製造機械金屬感 |
 | Voicemeeter Banana | 所有播出聲音自動加悶聲混響 |
-| OLED 1（0x3C） | 顯示蓮蓬頭回應文字，觀眾讀懂用 |
-| OLED 2（0x3D） | 顯示即時音訊電平波形（每 0.5 秒更新） |
+| OLED 1（0x3C，HW I2C） | 顯示蓮蓬頭回應文字，觀眾讀懂用 |
+| OLED 2（0x3C，SW I2C） | 顯示即時音訊電平波形（每 0.5 秒更新，BMAP_OK 流控） |
 | `/viz` 網頁 | 同步顯示音訊波形 + 模式狀態，可外接螢幕全螢幕 |
 | USB 喇叭 | 播出處理後的聲音 |
 | ~~librosa~~ | ~~分析環境音特徵~~ → 升級後由 Gemini multimodal 取代 |
 | ~~Chrome Web Speech API~~ | ~~語音轉文字~~ → 升級後由 Gemini multimodal 取代 |
+| ~~ElevenLabs~~ | ~~文字轉語音~~ → 改用 Edge TTS（免費，無配額限制） |
 
 ### Serial 通訊協定
 - Arduino → Python：`HOLD\n` / `RELEASE\n` / `HANG\n` / `BMAP_OK\n` / `BMAP_TIMEOUT:{n}\n`
@@ -145,8 +148,8 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 | `HOLD\n` | FSR 偵測到握力 | 進入對話模式，開始 VAD 錄音 |
 | `RELEASE\n` | FSR 放開 | 離開對話模式，回到環境音模式 |
 | `HANG\n` | 微動開關觸發（蓮蓬頭掛回） | 清除 conversation_history，重置 session |
-| `BMAP_OK\n` | OLED 點陣圖接收完成 | 確認顯示成功 |
-| `BMAP_TIMEOUT:{n}\n` | OLED 點陣圖接收逾時 | 重傳或略過 |
+| `BMAP_OK\n` | OLED 點陣圖接收完成 | Python 釋放 oled_send_lock（流控用） |
+| `BMAP_TIMEOUT:{n}\n` | OLED 點陣圖接收逾時 | 印出錯誤，繼續執行 |
 
 ---
 
@@ -155,11 +158,11 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 蓮蓬頭/
 ├── CLAUDE.md              ← 本文件
 ├── main.py                ← Python 主程式（系統大腦）
-├── memory.py              ← 記憶系統（聲音庫 + 對話紀錄 + 唱歌比較）
-├── memories.json          ← 21 筆聲音記憶庫
+├── memory.py              ← 記憶系統（聲音庫，目前未整合進 main.py）
+├── memories.json          ← 21 筆聲音記憶庫（目前未整合，Gemini multimodal 取代）
 ├── scan_sounds.py         ← 掃描音檔、互動式加入記憶庫
 ├── test_response.py       ← 8 情境自動化回應測試
-├── test_voices.py         ← ElevenLabs 聲音試聽比較工具
+├── test_mic.py            ← 麥克風診斷工具（列出裝置、測 rms）
 ├── requirements.txt       ← Python 套件清單
 ├── key.env                ← API 金鑰（不上傳 GitHub，等同 .env）
 ├── .env.example           ← 金鑰範本
@@ -179,8 +182,7 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 | 服務 | 狀態 |
 |------|------|
 | Gemini API（Google AI Studio） | ✅ 已設定，使用 `gemini-2.5-flash`，SDK 已升級至 `google-genai` |
-| ElevenLabs API key | ✅ 已設定於 key.env |
-| ElevenLabs Voice ID | ✅ Bella（premade，免費可用 API，`EXAVITQu4vr4xnSDxMaL`） |
+| Edge TTS | ✅ 免費，無需 API key，直接使用 `edge-tts` 套件 |
 
 ---
 
@@ -193,7 +195,6 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 | CH340 驅動（CH341SER.EXE） | ✅ 已安裝（Arduino Nano clone 用 CH340 晶片） |
 | Voicemeeter Banana | ✅ 已安裝，EQ + A1 輸出設定完成（見下方音效設定章節） |
 | VB-Cable | ✅ 已安裝（重新安裝 v2.1.5.8） |
-| Chrome 瀏覽器 | ✅ |
 
 ---
 
@@ -201,8 +202,8 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 | 元件 | 用途 | 狀態 |
 |------|------|------|
 | Arduino Nano | 讀取 FSR + 微動開關、驅動兩顆 OLED | ✅ 已有 |
-| 1.3吋 OLED I2C 128×64（SH1106）× 1 | 顯示文字回應（I2C 0x3C） | ✅ 已有 |
-| 1.3吋 OLED I2C 128×64（SH1106）× 2 | 顯示音訊波形（I2C 0x3D，SA0 接 VCC） | ⚠️ 待採購/接線 |
+| 1.3吋 OLED I2C 128×64（SH1106）× 1 | 顯示文字回應（HW I2C，A4/A5，0x3C） | ✅ 已有 |
+| 1.3吋 OLED I2C 128×64（SH1106）× 1 | 顯示音訊波形（SW I2C，D6/D7，0x3C） | ✅ 已有並接線完成 |
 | FSR 壓力感測器 | 偵測握力，切換對話模式 | ✅ 已有 |
 | 10kΩ 電阻 | FSR 分壓電路 | ✅ 已有 |
 | 微動開關（Micro Switch） | 偵測蓮蓬頭掛回，觸發對話記憶重置 | ✅ 已採購並測試（2026-05-22） |
@@ -444,34 +445,25 @@ SCL ─┤          ├─ 3.3V
 **ANCHOR_REMINDER**（每次 Gemini 呼叫前附加）：
 ```
 （強制規則：回應必須在3到16個中文字之間，超過16字就重新生成更短的版本。
+例外：被問到展覽或藝術相關問題時，允許最多20字。
 句尾不加句號。若對方說英文，只能回固定三句之一。不重複上一句句型。）
 ```
 
 ---
 
 ## 聲音設計
-- ElevenLabs 選年輕女聲作為基底（Voice ID：Bella premade，`EXAVITQu4vr4xnSDxMaL`）
+- **TTS 引擎**：Edge TTS，聲音 `zh-TW-HsiaoChenNeural`（台灣中文女聲，免費無配額）
 - Python 在播出前套用 **ring modulation**（60Hz 載波，depth=0.55）→ 機械質感
 - Voicemeeter Banana 套用 EQ：壓低高頻、提升低頻 → 悶、金屬腔體感
-- ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4`（活潑、不穩定感）
-- 效果疊加：活潑原聲 → ring modulation 機械化 → Voicemeeter 壓悶 → 最終輸出
+- 效果疊加：Edge TTS 原聲 → ring modulation 機械化 → Voicemeeter 壓悶 → 最終輸出
 - **文字（OLED）是給觀眾讀懂的版本，聲音才是它真實的樣子**
-
-### 已測試可用的免費 premade 聲音（2026-05-18）
-| 聲音名稱 | Voice ID | 特性 |
-|----------|----------|------|
-| **Bella**（選用） | `EXAVITQu4vr4xnSDxMaL` | 女聲，年輕感，活潑 |
-| Adam | `pNInz6obpgDQGcFmaJgB` | 男聲，沉穩 |
-| Rachel | `21m00Tcm4TlvDq8ikWAM` | 女聲，清晰溫和 |
-| Antoni | `ErXwobaYiN019PkySvjV` | 男聲，自然流暢 |
-| Arnold | `VR6AewLTigWG4xSOukaG` | 男聲，低沉粗獷 |
 
 ---
 
 ## Voicemeeter Banana 音效設定
 
 ### 音訊路由
-- ElevenLabs 播放裝置 → **Voicemeeter Input（VAIO）**
+- Edge TTS 播放裝置 → **Voicemeeter Input（VAIO）**
 - Voicemeeter A1 輸出 → **USB 音效裝置**（3.5mm 直插喇叭 + 3.5mm 轉 USB 音效線）
   - 筆電 combo 孔偵測問題透過 USB 音效線繞過，A1 選 `WDM: Speakers (USB Audio Device)` 或類似名稱
 
@@ -504,18 +496,20 @@ SCL ─┤          ├─ 3.3V
 - 透過 **TRRS 轉雙 TRS 分接頭**（紅＝麥克風孔、綠＝耳機孔）正常收音
 - 已確認可正常收音、錄音測試通過
 
-### 麥克風校準數值（2026-05-18 測定）
+### 麥克風校準數值（2026-05-26 重新實測）
 | 情況 | rms |
 |------|-----|
-| 安靜（背景噪音） | 0.015 |
-| 說話 | 0.029 |
-| 唱歌 | 0.063 |
+| 安靜（背景噪音） | ~0.039 |
+| 說話 | ~0.283 |
+| 唱歌 | ~0.249 |
+
+> 舊值（0.015 / 0.029 / 0.063）為 AI 降噪開啟時的錯誤數據，已廢棄。
+> 接電源供應器時若出現 ground loop（背景 rms 升至 ~0.078），請拔插電源後重測。
 
 ### 靜音門檻設定
-- `main.py` 靜音門檻：`rms < 0.015`
+- `main.py` 語音偵測門檻：`VAD_SPEECH_THRESHOLD = 0.100`
 - 低於此值視為安靜，不觸發 Gemini 回應
-- melody 偵測條件：`(harmonic_ratio > 0.92 and zcr < 0.04) or (harmonic_ratio > 0.88 and zcr < 0.03 and rms > 0.025)`
-- 說話的 hr 約 0.857–0.882，需 hr > 0.92 才算唱歌，避免誤判
+- **重要**：Realtek Audio Console → Microphone → AI降噪必須**關閉**，否則訊號被壓平
 
 ---
 
@@ -523,7 +517,7 @@ SCL ─┤          ├─ 3.3V
 | 時間 | 任務 |
 |------|------|
 | 提案後第 1–3 天 | 完成實體裝置：箱體、牆壁、蓮蓬頭固定 |
-| 提案後第 4–5 天 | ElevenLabs 聲音選定、全 API 測試 |
+| 提案後第 4–5 天 | 聲音選定、全 API 測試 |
 | 提案後第 6–8 天 | Python 腳本整合、個性設定反覆測試 |
 | 提案後第 9–10 天 | Voicemeeter 音效調整、全系統整合測試 |
 | 提案後第 11–12 天 | 調整、備案準備 |
@@ -532,26 +526,15 @@ SCL ─┤          ├─ 3.3V
 ---
 
 ## 待辦事項
-- [x] ElevenLabs：取得 API key + 選定 Voice ID 並填入 key.env
 - [x] Python 套件確認全部安裝完成
 - [x] VB-Cable 安裝（以系統管理員身份執行）
-- [x] Gemini → ElevenLabs → pygame 串聯測試通過
 - [x] 調整蓮蓬頭 SYSTEM_PROMPT 個性設定（移除水相關詞彙，純聽覺視角）
-- [x] 記憶系統建立（memory.py + memories.json，保留全部、帶入最近 5 筆）
-- [x] 全部音訊檔分析完成（21 筆，含 M4A 支援，使用 ffmpeg 轉檔）
-- [x] 唱歌品質比較系統（harmonic ratio 評分，前後場次比較，差距 > 0.08 才觸發）
+- [x] 記憶系統建立（memory.py + memories.json，21 筆，目前未整合進 main.py）
 - [x] scan_sounds.py：自動掃描新音檔，互動式加入 memories.json
-- [x] memories.json 完整建立（21 筆聲音記憶，每筆含 sample_responses 6–11 句）
-- [x] test_response.py：自動化場景測試（8 情境，不需互動，使用真實音頻參數）
-- [x] 回應調校：雨聲、狗叫聲、「你是誰」對話引導語更新
+- [x] test_response.py：自動化場景測試（8 情境）
 - [x] Voicemeeter 音效參數設定（EQ 完成，設定已儲存）
-- [x] 麥克風校準（靜音門檻調整為 0.015，melody 偵測條件調校）
-- [x] 環境音模式完整測試通過（唱歌、說話、環境音皆可正確匹配）
-- [x] 聲音效果疊加完成（ring modulation + Voicemeeter EQ + VoiceSettings 活潑參數）
-- [x] ElevenLabs 聲音確定（Bella premade，已批次測試所有免費可用聲音）
-- [x] test_voices.py：多聲音試聽比較工具（含 ring modulation 效果）
+- [x] 麥克風校準（2026-05-26 重新校準，VAD_SPEECH_THRESHOLD=0.100，AI降噪關閉）
 - [x] Arduino IDE 安裝 + U8g2 library（官網版 2.3.8，CH340 驅動 CH341SER.EXE）
-- [x] 硬體備齊（USB 喇叭暫以電腦替代，其餘全部到位）
 - [x] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測（2026-05-19 完成）
 - [x] **採購微動開關（Micro Switch）** — 掛架重置機制用
 - [x] **Arduino 新增微動開關接線 + 燒錄 HANG\n 訊號邏輯**（2026-05-22 測試通過）
@@ -559,52 +542,56 @@ SCL ─┤          ├─ 3.3V
 - [x] **升級 Gemini 為 multimodal 音訊輸入（環境音模式）** — `ask_gemini_audio()` 已實作
 - [x] **Python 加入每次對話的 instruction anchoring** — `ANCHOR_REMINDER` 已實作
 - [x] **Python 加入對話記憶（conversation_history）+ 收到 HANG\n 時清除**
-- [x] **Python VAD 靜音切段邏輯實作（對話模式，靜音 > 800ms 觸發斷句）** — PortAudio InputStream + Queue 統一收音，transcribe_audio() 轉錄，ask_gemini() 帶歷史回應（2026-05-24）
-- [x] **Gemini thinking 模式關閉（thinking_budget=0）** — 避免 THOUGHT 推理內容混入回應輸出（2026-05-24）
-- [x] **音訊波形視覺化網頁（/viz）** — Flask + SocketIO 推送即時 RMS，藍色=環境音 / 橘色=對話，可外接螢幕（2026-05-24）
-- [x] **OLED 2 波形顯示支援（程式碼完成）** — header 0xFC、rms_to_oled_bytes()、send_to_oled2()、audio_loop 每 0.5 秒更新；oled_send_lock 防衝突（2026-05-24）
-- [x] **Arduino 支援雙 OLED（程式碼完成）** — receiveBitmapToOled() 共用函數，header 0xFD→OLED1、0xFC→OLED2（2026-05-24）
-- [x] **OLED 2 硬體接線完成**（2026-05-25）— 兩顆均為 4 腳位無 SA0，改用軟體 I2C（D6=SCK, D7=SDA），地址同為 0x3C 但不衝突，測試顯示正常
+- [x] **Python VAD 靜音切段邏輯實作（對話模式，靜音 > 600ms 觸發斷句）**
+- [x] **Gemini thinking 模式關閉（thinking_budget=0）**
+- [x] **音訊波形視覺化網頁（/viz）** — Flask + SocketIO，藍色=環境音 / 橘色=對話
+- [x] **OLED 雙螢幕完整實作** — BMAP_OK 流控解決 serial 溢位問題（2026-05-26）
+- [x] **TTS 改用 Edge TTS**（`zh-TW-HsiaoChenNeural`）— 免費無配額，取代 ElevenLabs
+- [x] **Anti-repeat 強化** — 記最近 5 句，全部 Gemini call 統一套用，不再重複（2026-05-26）
+- [x] **死碼清除** — 移除 `transcribe_audio()`、`on_transcript` SocketIO handler（2026-05-26）
+- [x] **conversation_history 存真實文字** — 對話模式並行送出轉錄＋回應兩個 API call（2026-05-26）
+- [x] **展覽用喇叭**（3.5mm 直插喇叭 + 3.5mm 轉 USB 音效線，2026-05-25 測試正常）
+- [ ] **對話模式 lock 問題** — `dialogue_processing=True` 時音訊被丟棄，Gemini 處理中（3–8秒）觀眾說的話全部遺失
+- [ ] **viz.html 改版** — 加入最新 Gemini 回應文字顯示
 - [ ] **採購展場佈線延長元件** — 4.7kΩ 電阻 × 2、USB A公對A母延長線（150cm+）、3.5mm 公對母延長線（150cm+）× 1、TRS 公對母延長線（150cm+）× 2
-- [ ] **焊接 OLED I2C 延長線 + 加裝上拉電阻** — SDA 與 3.3V 之間接 4.7kΩ、SCL 與 3.3V 之間接 4.7kΩ，延長導線 150cm，焊後熱縮套管包覆
-- [ ] **焊接所有元件延長線** — FSR 訊號線（A0）/ 電源線（3.3V/GND）/ 微動開關（D2）各延長 150cm，完整佈線至箱體
-- [ ] **麥克風佈線確認** — 將 TRRS 轉雙 TRS 分接頭固定於箱體端，從分接頭拉兩條 TRS 延長線（紅孔/綠孔）至筆電
-- [x] **展覽用喇叭**（3.5mm 直插喇叭 + 3.5mm 轉 USB 音效線，2026-05-26 測試正常）
-- [ ] 全系統整合測試（含 Arduino 微動開關 + OLED 2 + 展場完整佈線）
-- [ ] ~~瀏覽器 Web Speech API 介面設定與測試~~ → 對話模式升級後由 Gemini multimodal 取代
+- [ ] **焊接 OLED I2C 延長線 + 加裝上拉電阻** — SDA 與 3.3V 之間接 4.7kΩ、SCL 與 3.3V 之間接 4.7kΩ
+- [ ] **焊接所有元件延長線** — FSR 訊號線（A0）/ 電源線（3.3V/GND）/ 微動開關（D2）各延長 150cm
+- [ ] **麥克風佈線確認** — 將 TRRS 轉雙 TRS 分接頭固定於箱體端，從分接頭拉兩條 TRS 延長線至筆電
+- [ ] 全系統整合測試（含 Arduino 微動開關 + OLED 雙螢幕 + 展場完整佈線）
 
 ## 技術備註
 - Gemini SDK 已從 `google-generativeai`（已停止維護）升級至 `google-genai`
-- 使用模型：`gemini-2.5-flash`，fallback：`gemini-1.5-flash`（gemini-2.0-flash / gemini-2.5-flash-lite-preview 已 404 或停止支援）
-- **thinking_budget=0**：gemini-2.5-flash 為思考模型，不加此設定會把推理過程（THOUGHT）混入回應。所有 generate_content 呼叫均加入 `ThinkingConfig(thinking_budget=0)` 關閉推理輸出
-- ElevenLabs 免費方案只能使用 `premade` 聲音（不能用聲音庫社群聲音）
-- API 金鑰存於 `key.env`（等同 .env），main.py 以 `load_dotenv("key.env", override=True)` 載入
+- 使用模型：`gemini-2.5-flash`，fallback：`gemini-1.5-flash`
+- **thinking_budget=0**：gemini-2.5-flash 為思考模型，不加此設定會把推理過程（THOUGHT）混入回應。所有 generate_content 呼叫均加入 `ThinkingConfig(thinking_budget=0)`
+- **TTS**：Edge TTS（`edge-tts` 套件），聲音 `zh-TW-HsiaoChenNeural`，免費無配額
+- **Ring modulation**：`_apply_robot_effect()` 在 speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
+- API 金鑰存於 `key.env`，main.py 以 `load_dotenv("key.env", override=True)` 載入
+- **SERIAL_PORT**：`key.env` 設定 `SERIAL_PORT=COM7`
+- **MIC_DEVICE_INDEX**：`key.env` 設定 `MIC_DEVICE_INDEX=數字`；裝置 index 會因 USB 插拔順序改變，跑 `test_mic.py` 重新確認
+- **麥克風增益設定**：Realtek Audio Console → 主音量拉滿、麥克風增益 +20dB、**AI降噪關閉**
+- **Ground loop 問題**：接電源供應器時背景 rms 可能升至 ~0.078（與說話 0.079 幾乎相同）。展場建議使用音訊隔離變壓器或 USB 麥克風。拔插電源後通常恢復正常
 - pygame 播放完畢後需呼叫 `pygame.mixer.music.unload()` 再刪除暫存檔，避免 Windows 檔案鎖定
-- M4A 等非標準格式透過 ffmpeg 轉成臨時 WAV 再用 librosa 分析，FFMPEG_DIR 設定於 key.env
-- memories.json v1.2：21 筆聲音記憶，含公園、捷運、雨聲、唱歌（中/英文）等
-- 唱歌品質分數：hr×0.6 + zcr_stability×0.3 + rms×0.1，比較差距 > 0.08 才輸出比較語
-- melody 偵測條件：`(hr > 0.92 and zcr < 0.04) or (hr > 0.88 and zcr < 0.03 and rms > 0.025)`（說話 hr 約 0.86–0.88，不觸發）
-- 唱歌記憶匹配優先：has_melody=True 時給唱歌記憶 −0.4 bonus，非人聲樂器 +0.3 懲罰
-- 靜音門檻：`rms < 0.015`（說話 rms ≈ 0.029，安靜背景 ≈ 0.015）
-- 麥克風：筆電為單一 TRRS combo 孔，TRRS 直插無聲；需透過 TRRS 轉雙 TRS 分接頭正常收音。喇叭改走 3.5mm 轉 USB 音效線，不佔 combo 孔
-- **MIC_DEVICE_INDEX**：`key.env` 設定 `MIC_DEVICE_INDEX=數字`（目前=1，對應 Microphone Realtek Audio）；裝置 index 會因 USB 插拔順序改變，跑 `test_mic.py` 重新確認。Windows 若自動停用麥克風裝置需手動到 mmsys.cpl 錄製分頁重新啟用
-- **麥克風增益設定**：Realtek Audio Console → Microphone (Realtek Audio) → 主音量拉滿、麥克風增益 +20dB、**AI降噪關閉**（AI降噪會削弱領夾麥克風訊號）。正常說話 rms ≈ 0.08，安靜背景 ≈ 0.005
+- **OLED 流控**：Python 送 bitmap 後等待 Arduino 回 `BMAP_OK`（`oled_ack` threading.Event），確保 Arduino 完成 I2C sendBuffer 後才送下一筆，防止 serial buffer 溢位
+- **oled_send_lock**：防止 OLED1（文字）與 OLED2（波形）同時寫 serial
+- **OLED 雙螢幕方案**：兩顆 SH1106 均為 4 腳位（無 SA0），改用軟體 I2C（`U8G2_SW_I2C`），OLED2 接 D6=SCK / D7=SDA，與 OLED1 走不同腳位，地址同為 0x3C 不衝突
+- **Anti-repeat**：`recent_responses` 保留最近 5 句，所有 Gemini call 前附加禁止清單，不隨 HANG 清除（跨觀眾積累）
+- **conversation_history**：對話模式每輪並行送出轉錄（無 system prompt）＋回應（帶 system prompt）兩個 API call，延遲與單次相同；user turn 存實際轉錄文字，轉錄失敗時 fallback 到 `[音訊輸入]`
 - 微動開關：D2（INPUT_PULLUP），COM→GND、NO→D2，80ms 軟體去彈跳，下降沿送 HANG\n
-- `session_log.json` 中 `matched_memory_id` 可能為 None，memory.py 已加入 `or ""` 防護
-- **Ring modulation**：`_apply_robot_effect()` 在 main.py speak() 內執行，60Hz 載波、depth=0.55，pydub + numpy 實作
-- ElevenLabs VoiceSettings：`stability=0.25, similarity_boost=0.5, style=0.4, use_speaker_boost=False`
-- Arduino loop() 不使用 `delay()`，改用 `millis()` 計時 FSR（delay 會造成 64 byte serial buffer overflow）
-- Arduino serial buffer 64 bytes，Python 一次送 1027 bytes，必須零 delay 才能即時消化
+- Arduino loop() 不使用 `delay()`，改用 `millis()` 計時
 - Windows Store 版 Arduino IDE 無法存取 COM port（沙盒限制），需用官網 .exe 安裝版
 - Arduino Nano clone 使用 CH340 晶片，需安裝 CH341SER.EXE 驅動；燒錄選 ATmega328P (Old Bootloader)
-- **OLED 雙螢幕方案**：兩顆 SH1106 均為 4 腳位（無 SA0 腳位），無法靠 SA0 區分地址。改用軟體 I2C（`U8G2_SW_I2C`），OLED 2 接 D6=SCK / D7=SDA，地址同為 0x3C 但走不同腳位不衝突。OLED 2 不需 I2C 上拉電阻（軟體 I2C 訊號穩定）
+- **memories.json / memory.py**：21 筆聲音記憶庫，目前**未整合進 main.py**。Gemini multimodal 直接辨識音訊內容，不需要預先特徵提取。12 筆浴室記憶已直接寫入 SYSTEM_PROMPT 作為背景故事。
 
-### 新架構決策（2026-05-21）
-- **Gemini multimodal 音訊輸入**：音訊片段直接傳給 Gemini，不再先用 librosa 提取數值特徵再轉文字描述。Gemini 可直接辨識語音內容、歌聲、咳嗽、環境音等，理解品質大幅提升。
-- **VAD 靜音切段**：對話模式改用 Python RMS 靜音偵測（持續靜音 > 800ms）作為句尾判斷，取代 Chrome Web Speech API。靜音門檻沿用已校準值 `rms < 0.015`。
-- **微動開關重置機制**：蓮蓬頭掛回時觸發 Arduino D2，送 `HANG\n` 給 Python，清除 `conversation_history`。每位觀眾對話記憶在物理動作（掛回）時清除，記憶邊界由裝置實際使用狀態決定，不靠計時。
-- **Instruction anchoring**：每次呼叫 Gemini 前，在 user message 前自動附加原則提醒句，避免長對話後 Gemini 偏離個性設定。
-- **Skill 文件**（system prompt 重構）：現有簡短 SYSTEM_PROMPT 將擴充為 9 章節完整 skill 文件，包含身份核心、禁止項目、說話規則、情境分支、記憶規則、多樣化規則、語氣示範庫、特殊狀況、重置機制。逐步與作者共同填寫。
-- **Gem（Gemini 介面上的自訂 AI）無法透過 API 呼叫**，所有個性設定仍透過 system prompt 在 API 端實作，效果與 Gem 相同。
+### 架構決策紀錄
+- **2026-05-21**：Gemini multimodal 音訊輸入取代 librosa + Web Speech API
+- **2026-05-21**：VAD 靜音切段取代 Chrome Web Speech
+- **2026-05-21**：微動開關重置機制（HANG → conversation_history 清除）
+- **2026-05-21**：Instruction anchoring（ANCHOR_REMINDER）
+- **2026-05-24**：oled2_loop 獨立執行緒 + oled2_state 共享狀態
+- **2026-05-26**：TTS 改用 Edge TTS（免費，取代 ElevenLabs）
+- **2026-05-26**：OLED BMAP_OK 流控（取代 hardcoded sleep）
+- **2026-05-26**：Anti-repeat 擴充至最近 5 句，套用全部 Gemini call
+- **2026-05-26**：conversation_history 存真實轉錄文字（並行 API call）
+- **2026-05-26**：移除死碼（transcribe_audio、on_transcript）
 
-*最後更新：2026-05-26（喇叭改用 3.5mm 轉 USB 音效線，繞過 combo 孔偵測問題，測試正常）*
+*最後更新：2026-05-26*
