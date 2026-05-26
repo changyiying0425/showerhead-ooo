@@ -132,7 +132,7 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 | Voicemeeter Banana | 所有播出聲音自動加悶聲混響 |
 | OLED 1（0x3C，HW I2C） | 顯示蓮蓬頭回應文字，觀眾讀懂用 |
 | OLED 2（0x3C，SW I2C） | 顯示即時音訊電平波形（每 0.5 秒更新，BMAP_OK 流控） |
-| `/viz` 網頁 | 同步顯示音訊波形 + 模式狀態，可外接螢幕全螢幕 |
+| `/viz` 網頁 | 同步顯示 halftone 點陣波形 + 模式狀態，背景色隨模式切換（黑/白），可外接螢幕全螢幕 |
 | USB 喇叭 | 播出處理後的聲音 |
 | ~~librosa~~ | ~~分析環境音特徵~~ → 升級後由 Gemini multimodal 取代 |
 | ~~Chrome Web Speech API~~ | ~~語音轉文字~~ → 升級後由 Gemini multimodal 取代 |
@@ -173,7 +173,7 @@ FSR HOLD → Python 切換對話模式（audio_loop 偵測模式切換）
 │       └── showerhead.ino ← Arduino Nano 程式
 └── web/
     ├── index.html         ← Chrome Web Speech API 介面（已停用，保留備用）
-    └── viz.html           ← 即時音訊波形視覺化（localhost:5000/viz，可外接螢幕）
+    └── viz.html           ← 即時音訊視覺化（halftone 點陣波形，背景隨模式切換，localhost:5000/viz）
 ```
 
 ---
@@ -545,14 +545,14 @@ SCL ─┤          ├─ 3.3V
 - [x] **Python VAD 靜音切段邏輯實作（對話模式，靜音 > 600ms 觸發斷句）**
 - [x] **Gemini thinking 模式關閉（thinking_budget=0）**
 - [x] **音訊波形視覺化網頁（/viz）** — Flask + SocketIO，藍色=環境音 / 橘色=對話
+- [x] **viz.html 波形改版** — halftone 點陣樣式，背景色隨模式切換（黑底白點↔白底黑點），SCALE=2.5（2026-05-27）
 - [x] **OLED 雙螢幕完整實作** — BMAP_OK 流控解決 serial 溢位問題（2026-05-26）
 - [x] **TTS 改用 Edge TTS**（`zh-TW-HsiaoChenNeural`）— 免費無配額，取代 ElevenLabs
 - [x] **Anti-repeat 強化** — 記最近 5 句，全部 Gemini call 統一套用，不再重複（2026-05-26）
 - [x] **死碼清除** — 移除 `transcribe_audio()`、`on_transcript` SocketIO handler（2026-05-26）
 - [x] **conversation_history 存真實文字** — 對話模式並行送出轉錄＋回應兩個 API call（2026-05-26）
 - [x] **展覽用喇叭**（3.5mm 直插喇叭 + 3.5mm 轉 USB 音效線，2026-05-25 測試正常）
-- [ ] **對話模式 lock 問題** — `dialogue_processing=True` 時音訊被丟棄，Gemini 處理中（3–8秒）觀眾說的話全部遺失
-- [ ] **viz.html 改版** — 加入最新 Gemini 回應文字顯示
+- [x] **對話模式 lock 問題** — 設計決定：維持現狀（處理中音訊全部丟棄），節奏感為「說話→等待→再說話」
 - [ ] **採購展場佈線延長元件** — 4.7kΩ 電阻 × 2、USB A公對A母延長線（150cm+）、3.5mm 公對母延長線（150cm+）× 1、TRS 公對母延長線（150cm+）× 2
 - [ ] **焊接 OLED I2C 延長線 + 加裝上拉電阻** — SDA 與 3.3V 之間接 4.7kΩ、SCL 與 3.3V 之間接 4.7kΩ
 - [ ] **焊接所有元件延長線** — FSR 訊號線（A0）/ 電源線（3.3V/GND）/ 微動開關（D2）各延長 150cm
@@ -593,5 +593,7 @@ SCL ─┤          ├─ 3.3V
 - **2026-05-26**：Anti-repeat 擴充至最近 5 句，套用全部 Gemini call
 - **2026-05-26**：conversation_history 存真實轉錄文字（並行 API call）
 - **2026-05-26**：移除死碼（transcribe_audio、on_transcript）
+- **2026-05-27**：viz.html 波形改為 halftone 點陣，背景色隨模式切換（黑↔白）
+- **2026-05-27**：對話模式 lock 設計決定：處理中音訊全部丟棄（維持慢節奏互動感）
 
-*最後更新：2026-05-26*
+*最後更新：2026-05-27*
