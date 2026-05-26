@@ -546,6 +546,7 @@ SCL ─┤          ├─ 3.3V
 - [x] **Gemini thinking 模式關閉（thinking_budget=0）**
 - [x] **音訊波形視覺化網頁（/viz）** — Flask + SocketIO，藍色=環境音 / 橘色=對話
 - [x] **viz.html 波形改版** — halftone 點陣樣式，背景色隨模式切換（黑底白點↔白底黑點），SCALE=2.5（2026-05-27）
+- [x] **viz.html 狀態動畫** — processing：放射呼吸圓；speaking：水波漂浮光點（2026-05-27）
 - [x] **OLED 雙螢幕完整實作** — BMAP_OK 流控解決 serial 溢位問題（2026-05-26）
 - [x] **TTS 改用 Edge TTS**（`zh-TW-HsiaoChenNeural`）— 免費無配額，取代 ElevenLabs
 - [x] **Anti-repeat 強化** — 記最近 5 句，全部 Gemini call 統一套用，不再重複（2026-05-26）
@@ -595,5 +596,7 @@ SCL ─┤          ├─ 3.3V
 - **2026-05-26**：移除死碼（transcribe_audio、on_transcript）
 - **2026-05-27**：viz.html 波形改為 halftone 點陣，背景色隨模式切換（黑↔白）
 - **2026-05-27**：對話模式 lock 設計決定：處理中音訊全部丟棄（維持慢節奏互動感）
+- **2026-05-27**：viz.html processing 狀態改為放射狀 halftone 圓形呼吸動畫
+- **2026-05-27**：viz.html speaking 狀態改為水波漂浮光點動畫（4 個漂移波源 + 漣漪）
 
-*最後更新：2026-05-27*
+*最後更新：2026-05-27（viz.html 狀態動畫完成）*

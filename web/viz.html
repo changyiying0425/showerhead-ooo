@@ -113,8 +113,9 @@
     const DOT_STEP = 6;       // 垂直方向點間距（px）
     const MAX_AMP  = H / 2 - DOT_STEP;  // 最大半振幅
 
-    let history     = new Array(HISTORY).fill(0);
-    let currentMode = 'ambient';
+    let history      = new Array(HISTORY).fill(0);
+    let currentMode  = 'ambient';
+    let currentState = 'waiting';
 
     const THEME = {
       ambient:  { label: '環境音模式',       color: '#42b8ff',
@@ -131,18 +132,107 @@
       speaking:     { dot: '#a855f7', text: '說話中（靜音閘）' },
     };
 
+    // ── 說話中：水波漂浮光點 ──────────────────────────────────
+    let _waveSrc   = null;   // 波源狀態（跨幀持續）
+    let _waveLastT = 0;
+
+    function _ensureWaveSrc() {
+      if (_waveSrc) return;
+      _waveSrc = [
+        { x: W*0.20, y: H*0.50, vx:  28, vy:  18 },
+        { x: W*0.70, y: H*0.30, vx: -22, vy:  26 },
+        { x: W*0.50, y: H*0.70, vx:  16, vy: -24 },
+        { x: W*0.85, y: H*0.55, vx: -20, vy: -15 },
+      ];
+    }
+
+    function drawSpeakingWave() {
+      _ensureWaveSrc();
+      const theme   = THEME[currentMode] || THEME.ambient;
+      const t       = Date.now() / 1000;
+      const dt      = Math.min(t - _waveLastT, 0.05);
+      _waveLastT    = t;
+      const spacing = 14;
+
+      // 移動波源（軟彈邊界）
+      _waveSrc.forEach(s => {
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        if (s.x < W * 0.05) s.vx =  Math.abs(s.vx);
+        if (s.x > W * 0.95) s.vx = -Math.abs(s.vx);
+        if (s.y < H * 0.05) s.vy =  Math.abs(s.vy);
+        if (s.y > H * 0.95) s.vy = -Math.abs(s.vy);
+      });
+
+      ctx.fillStyle = theme.bg;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.shadowBlur  = 10;
+      ctx.shadowColor = theme.dot;
+      ctx.fillStyle   = theme.dot;
+
+      for (let x = spacing / 2; x < W; x += spacing) {
+        for (let y = spacing / 2; y < H; y += spacing) {
+          let inf = 0;
+          _waveSrc.forEach(s => {
+            const dist = Math.sqrt((x - s.x) ** 2 + (y - s.y) ** 2);
+            const R = 110;
+            if (dist < R) {
+              const ripple  = 0.5 + 0.5 * Math.cos(dist * 0.13 - t * 3.5);
+              const falloff = (1 - dist / R) ** 1.5;
+              inf = Math.max(inf, falloff * ripple);
+            }
+          });
+          if (inf < 0.08) continue;
+          ctx.beginPath();
+          ctx.arc(x, y, inf * spacing * 0.48, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.shadowBlur = 0;
+    }
+
+    // ── 處理中：放射狀 Halftone 圓形（呼吸動畫）──────────────
+    function drawProcessingCircle() {
+      const theme   = THEME[currentMode] || THEME.ambient;
+      const cx = W / 2, cy = H / 2;
+      const spacing = 8;
+      const t = Date.now() / 1000;
+      // 呼吸：0.62 ↔ 1.0，週期約 3 秒
+      const pulse  = 0.62 + 0.38 * (0.5 + 0.5 * Math.sin(t * 2.1));
+      const maxRad = (H / 2 - 2) * pulse;   // 圓形半徑隨呼吸縮放
+
+      ctx.fillStyle = theme.bg;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = theme.dot;
+
+      for (let x = spacing / 2; x < W; x += spacing) {
+        for (let y = spacing / 2; y < H; y += spacing) {
+          const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+          if (dist > maxRad * 1.08) continue;   // 超出圓形範圍跳過
+
+          const norm = dist / maxRad;            // 0=圓心, 1=圓緣
+          const size = Math.max(0, 1 - norm) * spacing * 0.46;
+          if (size < 0.4) continue;
+
+          ctx.beginPath();
+          ctx.arc(x, y, size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
     // ── Halftone 點陣波形 ──────────────────────────────────
-    function draw() {
+    function drawWaveform() {
       const theme   = THEME[currentMode] || THEME.ambient;
       const colW    = W / HISTORY;
       const centerY = H / 2;
       const maxR    = Math.max(colW * 0.42, 1.2);   // 最大點半徑
       const minR    = Math.max(maxR * 0.18, 0.5);   // 最小點半徑（邊緣）
 
-      // 背景
       ctx.fillStyle = theme.bg;
       ctx.fillRect(0, 0, W, H);
-
       ctx.fillStyle = theme.dot;
 
       history.forEach((rms, i) => {
@@ -150,7 +240,6 @@
         const x    = (i + 0.5) * colW;
 
         if (ampH < 1) {
-          // 幾乎靜音：畫一個極小的中心點
           ctx.beginPath();
           ctx.arc(x, centerY, minR, 0, Math.PI * 2);
           ctx.fill();
@@ -160,17 +249,15 @@
         const numDots = Math.round(ampH / DOT_STEP) + 1;
 
         for (let d = 0; d < numDots; d++) {
-          const t = numDots > 1 ? d / (numDots - 1) : 0;  // 0=中心, 1=邊緣
+          const t = numDots > 1 ? d / (numDots - 1) : 0;
           const r = maxR - (maxR - minR) * t;
           const yOff = d * DOT_STEP;
 
           if (d === 0) {
-            // 中心點
             ctx.beginPath();
             ctx.arc(x, centerY, r, 0, Math.PI * 2);
             ctx.fill();
           } else {
-            // 上下對稱
             ctx.beginPath();
             ctx.arc(x, centerY - yOff, r, 0, Math.PI * 2);
             ctx.fill();
@@ -180,6 +267,16 @@
           }
         }
       });
+    }
+
+    function draw() {
+      if (currentState === 'speaking') {
+        drawSpeakingWave();
+      } else if (currentState === 'processing') {
+        drawProcessingCircle();
+      } else {
+        drawWaveform();
+      }
     }
 
     function loop() { draw(); requestAnimationFrame(loop); }
@@ -207,7 +304,8 @@
       history.push(rms);
       if (history.length > HISTORY) history.shift();
 
-      currentMode = mode;
+      currentMode  = mode;
+      currentState = state;
 
       // 模式標籤 + body 背景
       const theme = THEME[mode] || THEME.ambient;
