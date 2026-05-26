@@ -554,6 +554,8 @@ SCL ─┤          ├─ 3.3V
 - [x] **conversation_history 存真實文字** — 對話模式並行送出轉錄＋回應兩個 API call（2026-05-26）
 - [x] **展覽用喇叭**（3.5mm 直插喇叭 + 3.5mm 轉 USB 音效線，2026-05-25 測試正常）
 - [x] **對話模式 lock 問題** — 設計決定：維持現狀（處理中音訊全部丟棄），節奏感為「說話→等待→再說話」
+- [x] **OLED2 刷新平順化** — `oled2_loop` 更新間隔從 0.5s 縮至 0.15s（2026-05-27）
+- [x] **OLED1 啟動污染修復** — 根因：SW I2C OLED2 初始化耗時 3–4s，Arduino `setup()` 未完成前 Python 已送 bitmap，UART buffer 溢位後殘留 bytes 被錯誤路由至 OLED1。修法：`time.sleep(2)→5`；`arduino_ready` event 確保 `oled2_loop` 等 Arduino 就緒後再啟動（2026-05-27）
 - [ ] **採購展場佈線延長元件** — 4.7kΩ 電阻 × 2、USB A公對A母延長線（150cm+）、3.5mm 公對母延長線（150cm+）× 1、TRS 公對母延長線（150cm+）× 2
 - [ ] **焊接 OLED I2C 延長線 + 加裝上拉電阻** — SDA 與 3.3V 之間接 4.7kΩ、SCL 與 3.3V 之間接 4.7kΩ
 - [ ] **焊接所有元件延長線** — FSR 訊號線（A0）/ 電源線（3.3V/GND）/ 微動開關（D2）各延長 150cm
@@ -574,6 +576,8 @@ SCL ─┤          ├─ 3.3V
 - pygame 播放完畢後需呼叫 `pygame.mixer.music.unload()` 再刪除暫存檔，避免 Windows 檔案鎖定
 - **OLED 流控**：Python 送 bitmap 後等待 Arduino 回 `BMAP_OK`（`oled_ack` threading.Event），確保 Arduino 完成 I2C sendBuffer 後才送下一筆，防止 serial buffer 溢位
 - **oled_send_lock**：防止 OLED1（文字）與 OLED2（波形）同時寫 serial
+- **arduino_ready** (threading.Event)：`arduino_loop` 完成 OLED1 初始化後 set；`oled2_loop` 在 `arduino_ready.wait()` 前不送任何資料，防止 Arduino 尚未就緒時 OLED2 bytes 污染 OLED1
+- **Arduino 啟動等待**：`arduino_loop` 連線後 `time.sleep(5)`（原 2s）。原因：SW I2C OLED2 `sendBuffer()` 約需 3–4s，在此之前 Python 送出的 1027 bytes 會溢出 64-byte UART buffer，殘留 bytes 在 Arduino 進入 `loop()` 後被錯誤吸入 `receiveBitmapToOled(u8g2)`，導致 OLED1 顯示 OLED2 波形圖案
 - **OLED 雙螢幕方案**：兩顆 SH1106 均為 4 腳位（無 SA0），改用軟體 I2C（`U8G2_SW_I2C`），OLED2 接 D6=SCK / D7=SDA，與 OLED1 走不同腳位，地址同為 0x3C 不衝突
 - **Anti-repeat**：`recent_responses` 保留最近 5 句，所有 Gemini call 前附加禁止清單，不隨 HANG 清除（跨觀眾積累）
 - **conversation_history**：對話模式每輪並行送出轉錄（無 system prompt）＋回應（帶 system prompt）兩個 API call，延遲與單次相同；user turn 存實際轉錄文字，轉錄失敗時 fallback 到 `[音訊輸入]`
@@ -598,5 +602,7 @@ SCL ─┤          ├─ 3.3V
 - **2026-05-27**：對話模式 lock 設計決定：處理中音訊全部丟棄（維持慢節奏互動感）
 - **2026-05-27**：viz.html processing 狀態改為放射狀 halftone 圓形呼吸動畫
 - **2026-05-27**：viz.html speaking 狀態改為水波漂浮光點動畫（4 個漂移波源 + 漣漪）
+- **2026-05-27**：OLED2 刷新間隔 0.5s → 0.15s（oled2_loop）
+- **2026-05-27**：OLED1 啟動污染修復：`time.sleep(2→5)` + `arduino_ready` event；`oled2_loop` 等 Arduino 就緒後才啟動，初始化改為 inline BMAP_OK 讀取（避免 event deadlock）
 
-*最後更新：2026-05-27（viz.html 狀態動畫完成）*
+*最後更新：2026-05-27（OLED1 啟動污染修復）*

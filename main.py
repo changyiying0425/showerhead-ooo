@@ -11,6 +11,7 @@ Object-Oriented Ontology 互動裝置
 import os
 import sys
 import io
+import math
 import time
 import wave
 import queue
@@ -268,8 +269,11 @@ MAX_RECENT              = 5           # 保留幾句
 audio_queue             = queue.Queue(maxsize=300)  # PortAudio callback → 消費端
 oled_send_lock          = threading.Lock()          # 防止兩顆 OLED 同時寫 Serial
 oled_ack                = threading.Event()         # Arduino 回 BMAP_OK 時 set，send 函式等到再放鎖
+arduino_ready           = threading.Event()         # arduino_loop 初始化完成後 set，oled2_loop 等它再開始
 is_speaking             = False                     # TTS 播放中旗標（靜音閘，避免麥克風收到自己的聲音）
 oled2_state             = {"rms_history": [], "display_state": "waiting", "mode": "ambient"}  # OLED2 共享狀態
+_oled2_wave_src         = None    # speaking 水波波源狀態（跨幀持久）
+_oled2_wave_time        = 0.0
 
 # ═══════════════════════════════════════════════════
 #  OLED 點陣圖產生（PIL → U8g2 頁格式）
@@ -338,64 +342,157 @@ def send_to_oled(text: str):
                 oled_ack.clear()
                 arduino.write(bytes([0xFF, 0xFE, 0xFD]) + bitmap)
                 arduino.flush()
-                if not oled_ack.wait(timeout=2.0):
-                    print("[OLED] 等待 BMAP_OK 逾時")
-                print(f"[OLED] 傳送：{text[:30]}")
+                ok = oled_ack.wait(timeout=2.0)
+                if not ok:
+                    print("[OLED1] ⚠ BMAP_OK 逾時")
+                    if arduino and arduino.is_open:
+                        arduino.reset_input_buffer()
+                print(f"[OLED1] {'✓' if ok else '✗'} 傳送：{text[:30]}")
             except Exception as e:
                 print(f"[OLED] 傳送失敗：{e}")
     else:
         print("[OLED] 未連線，跳過傳送")
 
 
+def _oled2_waveform(rms_history: list, bg_color: int, dot_color: int) -> Image.Image:
+    """Halftone 點陣波形（對應 viz.html 波形樣式）"""
+    W, H     = 128, 64
+    N_COLS   = 21
+    COL_W    = W / N_COLS
+    CENTER_Y = H // 2
+    DOT_STEP = 4
+    MAX_AMP  = CENTER_Y - DOT_STEP
+    SCALE    = 2.5
+    MAX_R    = max(COL_W * 0.40, 1.0)
+    MIN_R    = max(MAX_R * 0.20, 0.5)
+
+    img  = Image.new("1", (W, H), bg_color)
+    draw = ImageDraw.Draw(img)
+
+    data = (rms_history[-N_COLS:]
+            if len(rms_history) >= N_COLS
+            else [0.0] * (N_COLS - len(rms_history)) + list(rms_history))
+
+    for i, rms in enumerate(data):
+        amp_h = min(rms * H * SCALE, MAX_AMP)
+        cx    = int((i + 0.5) * COL_W)
+
+        if amp_h < 1:
+            r = max(round(MIN_R), 1)
+            draw.ellipse([cx - r, CENTER_Y - r, cx + r, CENTER_Y + r], fill=dot_color)
+            continue
+
+        num_dots = round(amp_h / DOT_STEP) + 1
+        for d in range(num_dots):
+            t = d / (num_dots - 1) if num_dots > 1 else 0
+            r = max(round(MAX_R - (MAX_R - MIN_R) * t), 1)
+            y_off = d * DOT_STEP
+            if d == 0:
+                draw.ellipse([cx - r, CENTER_Y - r, cx + r, CENTER_Y + r], fill=dot_color)
+            else:
+                draw.ellipse([cx - r, CENTER_Y - y_off - r, cx + r, CENTER_Y - y_off + r], fill=dot_color)
+                draw.ellipse([cx - r, CENTER_Y + y_off - r, cx + r, CENTER_Y + y_off + r], fill=dot_color)
+    return img
+
+
+def _oled2_processing(bg_color: int, dot_color: int) -> Image.Image:
+    """放射狀 halftone 圓形，以 time.time() 驅動呼吸動畫"""
+    W, H    = 128, 64
+    cx, cy  = W // 2, H // 2
+    SPACING = 5
+    t       = time.time()
+    pulse   = 0.62 + 0.38 * (0.5 + 0.5 * math.sin(t * 2.1))
+    max_rad = (H // 2 - 2) * pulse
+
+    img  = Image.new("1", (W, H), bg_color)
+    draw = ImageDraw.Draw(img)
+
+    x = SPACING // 2
+    while x < W:
+        y = SPACING // 2
+        while y < H:
+            dist = math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+            if dist <= max_rad * 1.08:
+                norm = dist / max_rad if max_rad > 0 else 1.0
+                size = max(0.0, 1.0 - norm) * SPACING * 0.46
+                if size >= 0.8:
+                    r = max(round(size), 1)
+                    draw.ellipse([x - r, y - r, x + r, y + r], fill=dot_color)
+            y += SPACING
+        x += SPACING
+    return img
+
+
+def _oled2_speaking(bg_color: int, dot_color: int) -> Image.Image:
+    """水波漂浮光點動畫（對應 viz.html speaking 狀態）"""
+    global _oled2_wave_src, _oled2_wave_time
+    W, H = 128, 64
+
+    if _oled2_wave_src is None:
+        _oled2_wave_src = [
+            {"x": W * 0.20, "y": H * 0.50, "vx":  14.0, "vy":   9.0},
+            {"x": W * 0.70, "y": H * 0.30, "vx": -11.0, "vy":  13.0},
+            {"x": W * 0.50, "y": H * 0.70, "vx":   8.0, "vy": -12.0},
+            {"x": W * 0.85, "y": H * 0.55, "vx": -10.0, "vy":  -8.0},
+        ]
+        _oled2_wave_time = time.time()
+
+    now = time.time()
+    dt  = min(now - _oled2_wave_time, 0.1)
+    _oled2_wave_time = now
+
+    for s in _oled2_wave_src:
+        s["x"] += s["vx"] * dt
+        s["y"] += s["vy"] * dt
+        if s["x"] < W * 0.05: s["vx"] =  abs(s["vx"])
+        if s["x"] > W * 0.95: s["vx"] = -abs(s["vx"])
+        if s["y"] < H * 0.05: s["vy"] =  abs(s["vy"])
+        if s["y"] > H * 0.95: s["vy"] = -abs(s["vy"])
+
+    img  = Image.new("1", (W, H), bg_color)
+    draw = ImageDraw.Draw(img)
+
+    SPACING = 5
+    R       = 55    # 影響半徑（viz.html 110 按比例縮小）
+
+    x = SPACING // 2
+    while x < W:
+        y = SPACING // 2
+        while y < H:
+            inf = 0.0
+            for s in _oled2_wave_src:
+                dist = math.sqrt((x - s["x"]) ** 2 + (y - s["y"]) ** 2)
+                if dist < R:
+                    ripple  = 0.5 + 0.5 * math.cos(dist * 0.26 - now * 3.5)
+                    falloff = (1.0 - dist / R) ** 1.5
+                    inf     = max(inf, falloff * ripple)
+            if inf >= 0.08:
+                r = max(round(inf * SPACING * 0.48), 1)
+                draw.ellipse([x - r, y - r, x + r, y + r], fill=dot_color)
+            y += SPACING
+        x += SPACING
+    return img
+
+
 def rms_to_oled_bytes(rms_history: list,
                       state: str = "waiting",
                       mode: str = "ambient") -> bytearray:
     """
-    根據狀態與模式，產生對應的 OLED2 視覺圖樣：
-
-    - speaking（說話中）   → 黑底 + 七條漸寬橫線（喇叭放射圖案）
-    - dialogue（對話模式） → 白底 + 黑色 bar chart（反色，視覺上明顯變亮）
-    - ambient（環境音）    → 黑底 + 白色 bar chart（原有波形）
+    根據狀態與模式，產生對應的 OLED2 視覺圖樣（對應 viz.html 動畫）：
+    - speaking   → 水波漂浮光點
+    - processing → 放射呼吸圓
+    - 其他       → halftone 點陣波形
+    配色：ambient=黑底白點，dialogue=白底黑點
     """
-    SCALE    = 4.0
-    THRESH_Y = max(0, 63 - int(VAD_SPEECH_THRESHOLD * 64 * SCALE))
+    bg_color  = 1 if mode == "dialogue" else 0
+    dot_color = 0 if mode == "dialogue" else 1
 
     if state == "speaking":
-        # ── 說話中：七條漸寬橫線，菱形放射，傳達「在說話」 ──
-        img  = Image.new("1", (128, 64), 0)
-        draw = ImageDraw.Draw(img)
-        cx   = 64
-        # (y座標, 線段半寬)；越靠近中心越寬
-        bands = [(8, 10), (17, 25), (26, 45), (32, 60),
-                 (38, 45), (47, 25), (56, 10)]
-        for y, hw in bands:
-            draw.line([(cx - hw, y), (cx + hw, y)], fill=1)
-        # 中心實心圓點
-        draw.ellipse([cx - 3, 29, cx + 3, 35], fill=1)
-
+        img = _oled2_speaking(bg_color, dot_color)
+    elif state == "processing":
+        img = _oled2_processing(bg_color, dot_color)
     else:
-        # ── 波形 bar chart；對話模式反色 ──
-        bg_color  = 1 if mode == "dialogue" else 0
-        bar_color = 0 if mode == "dialogue" else 1
-        thr_color = 0 if mode == "dialogue" else 1
-
-        img  = Image.new("1", (128, 64), bg_color)
-        draw = ImageDraw.Draw(img)
-
-        data  = rms_history[-128:]
-        n     = len(data)
-        bar_w = max(1, 128 // n) if n else 1
-
-        for i, rms in enumerate(data):
-            bar_h = min(int(rms * 64 * SCALE), 62)
-            if bar_h == 0 and rms > 0:
-                bar_h = 1
-            x0 = i * bar_w
-            x1 = min(x0 + bar_w - 1, 127)
-            draw.rectangle([x0, 63 - bar_h, x1, 63], fill=bar_color)
-
-        # 門檻線
-        draw.line([(0, THRESH_Y), (127, THRESH_Y)], fill=thr_color)
+        img = _oled2_waveform(rms_history, bg_color, dot_color)
 
     pixels = np.array(img)
     buf = bytearray(1024)
@@ -419,14 +516,18 @@ def send_to_oled2(bitmap: bytearray):
                 oled_ack.clear()
                 arduino.write(bytes([0xFF, 0xFE, 0xFC]) + bitmap)
                 arduino.flush()
-                if not oled_ack.wait(timeout=2.0):
-                    print("[OLED2] 等待 BMAP_OK 逾時")
+                ok = oled_ack.wait(timeout=2.0)
+                if not ok:
+                    print("[OLED2] ⚠ BMAP_OK 逾時！殘留資料可能污染 OLED1")
+                    if arduino and arduino.is_open:
+                        arduino.reset_input_buffer()
             except Exception as e:
                 print(f"[OLED2] 傳送失敗：{e}")
 
 
 def oled2_loop():
-    """獨立執行緒：每 0.5 秒讀取 oled2_state，送出波形點陣圖到 OLED 2。"""
+    """獨立執行緒：每 0.15 秒讀取 oled2_state，送出波形點陣圖到 OLED 2。"""
+    arduino_ready.wait()  # 等 Arduino 初始化完成再開始
     while True:
         try:
             bmp = rms_to_oled_bytes(
@@ -437,7 +538,7 @@ def oled2_loop():
             send_to_oled2(bmp)
         except Exception as e:
             print(f"[OLED2] 更新錯誤：{e}")
-        time.sleep(0.5)
+        time.sleep(0.15)
 
 # ═══════════════════════════════════════════════════
 #  Anti-repeat hint（傳給所有 Gemini 呼叫）
@@ -1058,10 +1159,26 @@ def arduino_loop():
 
     try:
         arduino = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        time.sleep(2)   # 等待 Arduino 重置
-        arduino.reset_input_buffer()  # 清掉殘留資料
-        print(f"[Arduino] 連線成功：{SERIAL_PORT}")
-        send_to_oled("...")
+        print(f"[Arduino] 連線成功：{SERIAL_PORT}，等待 Arduino 啟動（5 秒）…")
+        time.sleep(5)   # 等待 Arduino 重置 + setup()（SW I2C OLED2 init 較慢，需 3–4s）
+        arduino.reset_input_buffer()  # 清掉啟動期間堆積的 FSR/RELEASE 訊息
+
+        # 初始化 OLED1：此時 while True 尚未啟動，oled_ack.set() 無人呼叫，
+        # 不能用 send_to_oled（會 2 秒逾時）。改為直接讀 BMAP 回應。
+        bitmap = text_to_oled_bytes("...")
+        arduino.write(bytes([0xFF, 0xFE, 0xFD]) + bitmap)
+        arduino.flush()
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            if arduino.in_waiting:
+                line = arduino.readline().decode("utf-8", errors="ignore").strip()
+                if line.startswith("BMAP"):
+                    print(f"[OLED] OLED1 初始化完成（{line}）")
+                    break
+        else:
+            print("[OLED] OLED1 初始化逾時（Arduino 尚未回 BMAP_OK）")
+
+        arduino_ready.set()          # 通知 oled2_loop 可以開始送了
     except Exception as e:
         print(f"[Arduino] 連線失敗（{e}）\n"
               f"  → 請確認 .env 裡的 SERIAL_PORT（目前設定：{SERIAL_PORT}）")
