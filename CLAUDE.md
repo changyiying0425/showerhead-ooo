@@ -657,4 +657,6 @@ SCL ─┤          ├─ 3.3V
 - **2026-05-27**：OLED1 啟動污染修復：`time.sleep(2→5)` + `arduino_ready` event；`oled2_loop` 等 Arduino 就緒後才啟動，初始化改為 inline BMAP_OK 讀取（避免 event deadlock）
 - **2026-05-30**：音訊倒放效果（Reverse Audio）— `REVERSE_AUDIO` 常數，倒放在 ring modulation 之前執行；新增 `test_reverse.py` 試聽工具
 
-*最後更新：2026-05-30（Skill 全面優化：身份核心加入身體感知、動物感知升級、新增情境分支、記憶規則強化、語氣示範庫大擴充、彩蛋語句庫上線、ANCHOR_REMINDER 精簡）*
+- **2026-05-30**：彩蛋機率統一設為十分之一、上限改為1次；自言自語三輪改用各異 prompt；對話靜音逾時 prompt 更新（BC混合語氣）；`easter_egg_count` 計數器 + HANG 時重置
+
+*最後更新：2026-05-30（彩蛋機率/上限調整、自言自語分輪、對話靜音 prompt 更新）*
