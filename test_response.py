@@ -195,7 +195,7 @@ for sc in SCENARIOS:
         print(f"  字數      ：{length_result}")
 
         if sc.get("check_easter"):
-            is_egg = ans.strip() in EASTER_EGG_LINES
+            is_egg = ans.strip().rstrip("。，？！") in EASTER_EGG_LINES
             print(f"  彩蛋      ：{'✓ 觸發！' if is_egg else '未觸發（機率性，正常）'}  {sc.get('easter_hint', '')}")
 
         print(f"  {OK}")

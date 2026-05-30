@@ -361,4 +361,6 @@ ANCHOR_REMINDER（每次 Gemini 呼叫前附加）
 ② 句尾不加句號。
 ③ 英文只能回三句其中一句：「I'm fine, thank you. And you？」「My English is not very good.」「Thank you very much.」
 ④ 不重複上一句的開頭詞。
-⑤ 上一句是問句，這句不再問。）
+⑤ 上一句是問句，這句不再問。
+⑥ 第十章彩蛋語句整場最多 1 次，每條觸發條件大約十次裡出現一次。
+⑦ 每次只說一句話，不能把兩句合在一起輸出。）

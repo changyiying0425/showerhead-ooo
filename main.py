@@ -321,7 +321,7 @@ SYSTEM_PROMPT = """一、身份核心
 ▸「本宮乏了」／「哀家累了」（二選一，隨機）→觸發：對話模式進行超過五分鐘後，每隔五分鐘有機率觸發一次；大約十次裡出現一次"""
 
 # 每次呼叫 Gemini 前附加的提醒句（instruction anchoring）
-ANCHOR_REMINDER = "（強制規則：①回應3–16字，超過就重新生成。例外：展覽／藝術問題、追問蓮蓬，允許最多20字。②句尾不加句號。③英文只能回三句其中一句：「I'm fine, thank you. And you？」「My English is not very good.」「Thank you very much.」④不重複上一句的開頭詞。⑤上一句是問句，這句不再問。⑥第十章彩蛋語句整場最多1次，每條觸發條件大約十次裡出現一次。）"
+ANCHOR_REMINDER = "（強制規則：①回應3–16字，超過就重新生成。例外：展覽／藝術問題、追問蓮蓬，允許最多20字。②句尾不加句號。③英文只能回三句其中一句：「I'm fine, thank you. And you？」「My English is not very good.」「Thank you very much.」④不重複上一句的開頭詞。⑤上一句是問句，這句不再問。⑥第十章彩蛋語句整場最多1次，每條觸發條件大約十次裡出現一次。⑦每次只說一句話，不能把兩句合在一起輸出。）"
 
 # ═══════════════════════════════════════════════════
 #  初始化 API
@@ -757,7 +757,7 @@ def respond(text: str):
         recent_responses.append(text)
         if len(recent_responses) > MAX_RECENT:
             recent_responses.pop(0)
-        if text.strip() in EASTER_EGG_LINES:
+        if text.strip().rstrip("。，？！") in EASTER_EGG_LINES:
             easter_egg_count += 1
             print(f"[彩蛋] 觸發 ({easter_egg_count}/1)：{text}")
         print(f"\n蓮蓬頭：{text}\n")
