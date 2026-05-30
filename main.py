@@ -650,7 +650,20 @@ def _anti_repeat_hint() -> str:
 
 REVERSE_AUDIO = True   # 倒放開關：True=整句倒放，False=正常播放
 
-def _apply_robot_effect(audio_bytes: bytes) -> bytes:
+# 彩蛋台詞：符合時跳過倒放，正常播放
+EASTER_EGG_LINES = {
+    "他叫我洗馬桶欸？康永哥",
+    "你不要再裝出聽不見的表情好不好！",
+    "哎呦，怎麼會這麼土的音樂啊！你不土會死欸！",
+    "六年啦！",
+    "劉硬炮",
+    "我開的是我父母的二手車",
+    "臣妾做不到啊！",
+    "本宮乏了",
+    "哀家累了",
+}
+
+def _apply_robot_effect(audio_bytes: bytes, reverse: bool = True) -> bytes:
     """
     環形調製：把語音乘以低頻載波，製造金屬共鳴/機械感。
     carrier_freq 越低越像低頻嗡嗡聲，40–80Hz 效果明顯。
@@ -664,7 +677,7 @@ def _apply_robot_effect(audio_bytes: bytes) -> bytes:
     ch     = seg.channels
     samples = np.frombuffer(seg.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
 
-    if REVERSE_AUDIO:
+    if REVERSE_AUDIO and reverse:
         samples = samples[::-1]
 
     carrier_freq = 60.0   # Hz，可調：數字越小越沉、越大越像電話
@@ -700,7 +713,8 @@ def speak(text: str):
 
         with open(tmp_path, "rb") as f:
             raw = f.read()
-        audio_bytes = _apply_robot_effect(raw)
+        is_easter_egg = text.strip() in EASTER_EGG_LINES
+        audio_bytes = _apply_robot_effect(raw, reverse=not is_easter_egg)
         with open(tmp_path, "wb") as f:
             f.write(audio_bytes)
 
