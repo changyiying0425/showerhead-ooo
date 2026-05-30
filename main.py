@@ -557,6 +557,8 @@ def _anti_repeat_hint() -> str:
 #  機械感音效處理（Ring Modulation）
 # ═══════════════════════════════════════════════════
 
+REVERSE_AUDIO = True   # 倒放開關：True=整句倒放，False=正常播放
+
 def _apply_robot_effect(audio_bytes: bytes) -> bytes:
     """
     環形調製：把語音乘以低頻載波，製造金屬共鳴/機械感。
@@ -570,6 +572,9 @@ def _apply_robot_effect(audio_bytes: bytes) -> bytes:
     sr     = seg.frame_rate
     ch     = seg.channels
     samples = np.frombuffer(seg.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+
+    if REVERSE_AUDIO:
+        samples = samples[::-1]
 
     carrier_freq = 60.0   # Hz，可調：數字越小越沉、越大越像電話
     depth        = 0.55   # 0.0–1.0，效果強度
@@ -664,36 +669,35 @@ def ask_gemini(prompt: str, use_history: bool = False) -> str | None:
     else:
         contents = user_text
 
-    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-        for attempt in range(2):
-            try:
-                resp = gemini.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
+    for attempt in range(4):
+        try:
+            resp = gemini.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            result = resp.text.strip()
+
+            if use_history:
+                conversation_history.append(
+                    {"role": "user", "parts": [{"text": user_text}]}
                 )
-                result = resp.text.strip()
+                conversation_history.append(
+                    {"role": "model", "parts": [{"text": result}]}
+                )
 
-                if use_history:
-                    conversation_history.append(
-                        {"role": "user", "parts": [{"text": user_text}]}
-                    )
-                    conversation_history.append(
-                        {"role": "model", "parts": [{"text": result}]}
-                    )
-
-                return result
-            except Exception as e:
-                err = str(e)
-                if "503" in err and attempt == 0:
-                    print(f"[Gemini] {model} 503，2 秒後重試...")
-                    time.sleep(2)
-                else:
-                    print(f"[Gemini] {model} 錯誤：{e}")
-                    break
+            return result
+        except Exception as e:
+            err = str(e)
+            if "503" in err and attempt < 3:
+                print(f"[Gemini] gemini-2.5-flash 503，2 秒後重試（第 {attempt+1} 次）...")
+                time.sleep(2)
+            else:
+                print(f"[Gemini] gemini-2.5-flash 錯誤：{e}")
+                break
     return None
 
 # ═══════════════════════════════════════════════════
@@ -741,28 +745,27 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
         except Exception as e:
             print(f"[Gemini 聽到] 辨識失敗：{e}")
 
-    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-        for attempt in range(2):   # 503 時自動重試一次
-            try:
-                resp = gemini.models.generate_content(
-                    model=model,
-                    contents=[{"role": "user", "parts": parts}],
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
-                )
-                result = resp.text.strip()
-                print(f"[Gemini 回覆] {result}")
-                return result
-            except Exception as e:
-                err = str(e)
-                if "503" in err and attempt == 0:
-                    print(f"[Gemini Audio] {model} 503，2 秒後重試...")
-                    time.sleep(2)
-                else:
-                    print(f"[Gemini Audio] {model} 錯誤：{e}")
-                    break
+    for attempt in range(4):   # 503 時自動重試，最多 4 次
+        try:
+            resp = gemini.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[{"role": "user", "parts": parts}],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            result = resp.text.strip()
+            print(f"[Gemini 回覆] {result}")
+            return result
+        except Exception as e:
+            err = str(e)
+            if "503" in err and attempt < 3:
+                print(f"[Gemini Audio] gemini-2.5-flash 503，2 秒後重試（第 {attempt+1} 次）...")
+                time.sleep(2)
+            else:
+                print(f"[Gemini Audio] gemini-2.5-flash 錯誤：{e}")
+                break
     return None
 
 
@@ -812,26 +815,25 @@ def ask_gemini_audio_dialogue(audio: np.ndarray) -> str | None:
                 if conversation_history else [{"role": "user", "parts": current_parts}])
 
     def _respond():
-        for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-            for attempt in range(2):
-                try:
-                    resp = gemini.models.generate_content(
-                        model=model,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            thinking_config=types.ThinkingConfig(thinking_budget=0),
-                        ),
-                    )
-                    return resp.text.strip()
-                except Exception as e:
-                    err = str(e)
-                    if "503" in err and attempt == 0:
-                        print(f"[VAD] {model} 503，2 秒後重試...")
-                        time.sleep(2)
-                    else:
-                        print(f"[VAD] {model} 錯誤：{e}")
-                        break
+        for attempt in range(4):
+            try:
+                resp = gemini.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    ),
+                )
+                return resp.text.strip()
+            except Exception as e:
+                err = str(e)
+                if "503" in err and attempt < 3:
+                    print(f"[VAD] gemini-2.5-flash 503，2 秒後重試（第 {attempt+1} 次）...")
+                    time.sleep(2)
+                else:
+                    print(f"[VAD] gemini-2.5-flash 錯誤：{e}")
+                    break
         return None
 
     # ── 並行執行，等兩個都完成 ──
@@ -1208,7 +1210,7 @@ def _switch_dialogue():
     if mode != "dialogue":
         mode = "dialogue"
         print("[模式] → 對話")
-        send_to_oled("聽著...")
+        threading.Thread(target=send_to_oled, args=("聽著...",), daemon=True).start()
 
 
 def _switch_ambient():
@@ -1222,7 +1224,7 @@ def _reset_conversation():
     global conversation_history
     conversation_history.clear()
     print("[重置] 對話記憶已清除，等待下一位觀眾")
-    send_to_oled("...")
+    threading.Thread(target=send_to_oled, args=("...",), daemon=True).start()
 
 # ═══════════════════════════════════════════════════
 #  Flask 路由 & SocketIO 事件
