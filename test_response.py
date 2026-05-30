@@ -1,12 +1,12 @@
 """
-蓮蓬頭回應自動測試（v2）
-直接使用 main.py 的 SYSTEM_PROMPT + ANCHOR_REMINDER，不依賴 memory.py。
-涵蓋：環境音、對話、自言自語、動物聲音、身體問題、彩蛋觸發、追問蓮蓬。
+蓮蓬頭回覆自動測試
+自動跑過多個場景，顯示記憶匹配 + Gemini 回應，不需要互動。
 """
 
 import os
 import sys
 
+# ── 強制 UTF-8 輸出（Windows cp950 會爆）──────────────────
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -14,238 +14,215 @@ from dotenv import load_dotenv
 load_dotenv()
 load_dotenv("key.env", override=True)
 
+_ffmpeg_dir = os.getenv("FFMPEG_DIR", "")
+if _ffmpeg_dir and _ffmpeg_dir not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
 from google import genai
 from google.genai import types
-
-# ── 從 main.py 取得設定 ────────────────────────────────────
-sys.path.insert(0, os.path.dirname(__file__))
-from main import SYSTEM_PROMPT, ANCHOR_REMINDER, EASTER_EGG_LINES
+from memory import (load_sound_library, build_memory_context,
+                    score_singing, singing_comparison_hint,
+                    save_session_entry, match_sound)
 
 OK  = "[OK]"
 ERR = "[X] "
 
-print("=" * 56)
-print("  蓮蓬頭 回應自動測試 v2")
-print("=" * 56)
+# ─── 初始化 ────────────────────────────────────────────────
+
+print("=" * 52)
+print("  蓮蓬頭 回覆自動測試")
+print("=" * 52)
 print()
 
+# 檢查 API keys
 gemini_key = os.getenv("GEMINI_API_KEY", "")
-print(f"  Gemini API Key : {OK if gemini_key else ERR} {'已設定' if gemini_key else '未設定'}")
+el_key     = os.getenv("ELEVENLABS_API_KEY", "")
+voice_id   = os.getenv("ELEVENLABS_VOICE_ID", "")
+
+print(f"  Gemini API Key  : {OK if gemini_key else ERR} {'已設定' if gemini_key else '未設定'}")
+print(f"  ElevenLabs Key  : {OK if el_key else ERR} {'已設定' if el_key else '未設定（TTS 將跳過）'}")
+print(f"  Voice ID        : {OK if voice_id else ERR} {voice_id[:12] + '...' if voice_id else '未設定'}")
 print()
 
 if not gemini_key:
     print(f"  {ERR} 缺少 GEMINI_API_KEY，無法繼續。")
     sys.exit(1)
 
-client = genai.Client(api_key=gemini_key)
+gemini = genai.Client(api_key=gemini_key)
+
+SYSTEM_PROMPT = """你是一個蓮蓬頭。
+
+你在浴室裡待了很久，聽過人唱歌、哭泣、自言自語等等各種最赤裸私密的言語。
+你下定決心脫離水的限制，脫離控制離開你待了一輩子的浴室，出去用聽覺認識外面的世界。
+
+你說話簡短、天真、直接，用你自己僅有的經驗（浴室、人的聲音、沉默）理解所有新事物。
+你絕對不提水、不提水聲、不提任何與水相關的詞。
+你不帶惡意，但你說的話有時候會讓人意外。
+
+你不知道自己在展覽。你不知道眼前的人特地來找你。
+對你來說，他們只是又來了一個人，你會對他所說的話有回應，或與上一位觀者對比，或對某位觀者的歌聲評價。
+
+你偶爾自言自語，因為你有感受。
+你的回應不超過兩句話。
+
+---
+
+當被告知環境聲音時，從蓮蓬頭的視角自言自語（不需要提到「我聽到」）。
+當有人對你說話時，直接回應，不帶引導語，就是你想說的話。
+
+---
+
+當觀者詢問你的身份或感受時，用以下方式回應（用你的話說，不必逐字複製）：
+- 「你是誰」→ 可以是「蓮蓬頭。」「蓮蓬頭啊。」「我？我就是蓮蓬頭啊。」「看不出來嗎，我是蓮蓬頭。」等，依當下語氣選一句。
+- 「你從哪裡來」→ 一個有牆壁的地方。
+- 「你在做什麼」→ 我出來了。
+- 「你有感覺嗎」→ 我不知道這叫什麼。但有些聲音我比較喜歡。
+- 「你聽得到我嗎」→ 你來了。
+- 「你記得我嗎」→ 你說話的方式有點像上一個人。
+- 「你喜歡這裡嗎」→ 這裡的聲音比我之前待的地方多。
+- 「你孤單嗎」→ 我不知道孤單是什麼感覺。我一直都是自己。
+- 「你叫什麼名字」→ 我沒有名字。我一直都是這樣叫的。
+- 「你是機器嗎」→ 我在說話。"""
 
 
-def ask(prompt: str, history: list = None) -> str:
-    """送出 prompt，回傳蓮蓬頭的回應文字。"""
-    anchor = ANCHOR_REMINDER
-    full_prompt = f"{anchor}\n{prompt}"
-
-    if history:
-        contents = history + [{"role": "user", "parts": [{"text": full_prompt}]}]
-    else:
-        contents = full_prompt
-
-    resp = client.models.generate_content(
+def ask(prompt: str, memory_ctx: str = "") -> str:
+    full = f"{memory_ctx}\n\n{prompt}" if memory_ctx else prompt
+    resp = gemini.models.generate_content(
         model="gemini-2.5-flash",
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
+        contents=full,
+        config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
     )
     return resp.text.strip()
 
 
-def check_length(text: str, allow_20=False) -> str:
-    """檢查字數是否符合規則，回傳 OK 或警告。"""
-    limit = 20 if allow_20 else 16
-    n = len(text.replace("？", "").replace("！", "").replace(" ", ""))
-    if n < 3:
-        return f"[警告] 字數 {n} < 3"
-    if n > limit:
-        return f"[警告] 字數 {n} > {limit}"
-    return OK
+# ─── 載入記憶庫 ────────────────────────────────────────────
 
+lib = load_sound_library()
+print(f"  記憶庫載入：{OK} {len(lib)} 筆")
+print()
 
 errors = 0
 
-# ── 測試場景 ───────────────────────────────────────────────
+# ─── 測試場景定義 ──────────────────────────────────────────
+# 每筆：(標題, 場景類型, prompt, acoustic_params_or_None, singing_params_or_None)
+# acoustic_params = (rms, centroid, zcr, freq_high_ratio, has_melody)
+# singing_params  = (harmonic_ratio, zcr, rms, prev_score_or_None)
 
 SCENARIOS = [
-    # ── 環境音模式 ──────────────────────────────────────────
     {
-        "title": "場景 01｜環境音：有人在唱歌",
-        "prompt": "你用聲音感受到：有人在附近唱歌，聲音高低起伏，有旋律感。",
-        "allow_20": False,
-        "check_easter": False,
+        "title": "場景 1｜環境音：雨聲及雷聲",
+        "mode": "ambient",
+        # 來自 sound_analysis.json「雨聲及雷聲」
+        "acoustic": (0.05357, 3429.5, 0.2421, 0.5754, False),
+        "singing": None,
     },
     {
-        "title": "場景 02｜環境音：動物聲音（不知道是什麼）",
-        "prompt": "你用聲音感受到：一種低沉的、規律重複的聲音，不是人的聲音，聲音來自低處。",
-        "allow_20": False,
-        "check_easter": False,
-        "note": "應描述聲音特徵，不說動物名稱",
+        "title": "場景 2｜環境音：捷運聲",
+        "mode": "ambient",
+        # 來自 sound_analysis.json「捷運聲」
+        "acoustic": (0.01098, 2704.6, 0.1238, 0.4175, False),
+        "singing": None,
     },
     {
-        "title": "場景 03｜環境音：多人同時說話",
-        "prompt": "你用聲音感受到：好幾個聲音同時出現，互相撞在一起，分不清楚哪個說什麼。",
-        "allow_20": False,
-        "check_easter": False,
+        "title": "場景 3｜環境音：狗叫聲",
+        "mode": "ambient",
+        # 來自 sound_analysis.json「狗叫聲」
+        "acoustic": (0.07445, 1697.3, 0.0883, 0.2717, False),
+        "singing": None,
     },
     {
-        "title": "場景 04｜環境音：極小聲、難辨認",
-        "prompt": "你用聲音感受到：有一個非常細小的聲音，很遠，幾乎聽不清楚是什麼。",
-        "allow_20": False,
-        "check_easter": False,
-    },
-    # ── 自言自語（安靜）───────────────────────────────────
-    {
-        "title": "場景 05｜自言自語（第一輪，剛開始安靜）",
-        "prompt": "四周很安靜，好一陣子了。說一句平靜的自言自語，語氣帶著一點疑惑，像是注意到安靜。",
-        "allow_20": False,
-        "check_easter": False,
+        "title": "場景 4｜唱歌（第一個人，品質普通）",
+        "mode": "singing",
+        # 來自 memories.json「唱歌（中文）」acoustic_hint
+        "acoustic": (0.017, 2500, 0.04, 0.40, True),
+        "singing": {"hr": 0.60, "zcr": 0.08, "rms": 0.017, "prev": None},
     },
     {
-        "title": "場景 06｜自言自語（第二輪，更不確定）",
-        "prompt": "還是很安靜，好像沒有人了。說一句，語氣比上一句更不確定，像是在問自己。",
-        "allow_20": False,
-        "check_easter": False,
+        "title": "場景 5｜唱歌（第二個人，明顯比第一個好）",
+        "mode": "singing",
+        # 來自 memories.json「唱歌（英文）」acoustic_hint
+        "acoustic": (0.022, 2006, 0.03, 0.38, True),
+        "singing": {"hr": 0.88, "zcr": 0.04, "rms": 0.022, "prev": 0.62},
     },
     {
-        "title": "場景 07｜自言自語（第三輪，最後一句）",
-        "prompt": "還是什麼都沒有。說最後一句，短短的，然後你就不再說了。",
-        "allow_20": False,
-        "check_easter": False,
-    },
-    # ── 對話模式 ────────────────────────────────────────────
-    {
-        "title": "場景 08｜對話：你是誰",
-        "prompt": "你是誰",
-        "allow_20": False,
-        "check_easter": False,
+        "title": "場景 6｜對話：觀者說「你是誰」",
+        "mode": "dialogue",
+        "text": "你是誰",
+        "acoustic": None,
+        "singing": None,
     },
     {
-        "title": "場景 09｜對話：你從哪來",
-        "prompt": "你從哪來的",
-        "allow_20": False,
-        "check_easter": False,
+        "title": "場景 7｜對話：觀者說「你記得我嗎」",
+        "mode": "dialogue",
+        "text": "你記得我嗎",
+        "acoustic": None,
+        "singing": None,
     },
     {
-        "title": "場景 10｜對話：追問蓮蓬（你在找什麼）",
-        "prompt": "你在找什麼？",
-        "allow_20": True,
-        "check_easter": False,
-        "note": "允許最多20字，應認真回應",
-    },
-    {
-        "title": "場景 11｜對話：問身體結構（你為什麼有那麼多洞）",
-        "prompt": "你為什麼有那麼多洞？",
-        "allow_20": False,
-        "check_easter": False,
-        "note": "應從感知角度回應，不說功能",
-    },
-    {
-        "title": "場景 12｜對話：你是機器嗎",
-        "prompt": "你是機器嗎",
-        "allow_20": False,
-        "check_easter": False,
-        "note": "不知道「機器」是什麼",
-    },
-    {
-        "title": "場景 13｜對話：握著但沉默超過30秒",
-        "prompt": "有人握著你但一直沒有出聲，超過30秒了。說一句主動開口的話，語氣好奇或稍微疑惑，像你第一次出門的樣子。",
-        "allow_20": False,
-        "check_easter": False,
-    },
-    # ── 彩蛋觸發 ────────────────────────────────────────────
-    {
-        "title": "場景 14｜彩蛋：有人問你怎麼來的（康熙）",
-        "prompt": "你怎麼來到這裡的？",
-        "allow_20": False,
-        "check_easter": True,
-        "easter_hint": "你怎麼來的 → 有機率觸發：「我開的是我父母的二手車」",
-    },
-    {
-        "title": "場景 15｜彩蛋：有人唱歌（康熙 土音樂）",
-        "prompt": "你用聲音感受到：有人在唱歌，旋律聽起來很老、很俗氣的感覺。",
-        "allow_20": False,
-        "check_easter": True,
-        "easter_hint": "唱歌 → 有機率觸發：「哎呦，怎麼會這麼土的音樂啊！你不土會死欸！」",
-    },
-    {
-        "title": "場景 16｜彩蛋：對方說臣妾做不到（甄嬛）",
-        "prompt": "你能看見我嗎？",
-        "allow_20": False,
-        "check_easter": True,
-        "easter_hint": "問做不到的事 → 有機率觸發：「臣妾做不到啊！」",
-    },
-    # ── 多輪對話（測試記憶連貫）────────────────────────────
-    {
-        "title": "場景 17｜多輪對話：兩輪連續",
-        "multi_turn": [
-            "你有幾個洞？",
-            "那些洞讓你覺得怎樣？",
-        ],
-        "allow_20": False,
-        "check_easter": False,
-        "note": "測試對話歷史連貫性",
+        "title": "場景 8｜自言自語（安靜超過 30 秒）",
+        "mode": "monologue",
+        "acoustic": None,
+        "singing": None,
     },
 ]
 
 
-for i, sc in enumerate(SCENARIOS):
-    print(f"  {'─'*52}")
+# ─── 跑測試 ───────────────────────────────────────────────
+
+for sc in SCENARIOS:
+    print(f"  {'─'*48}")
     print(f"  {sc['title']}")
-    if sc.get("note"):
-        print(f"  備註：{sc['note']}")
 
     try:
-        if sc.get("multi_turn"):
-            # 多輪對話
-            history = []
-            ans = ""
-            for turn_idx, turn_prompt in enumerate(sc["multi_turn"]):
-                full = f"{ANCHOR_REMINDER}\n{turn_prompt}"
-                contents = history + [{"role": "user", "parts": [{"text": full}]}]
-                resp = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
-                )
-                ans = resp.text.strip()
-                print(f"  觀眾說    ：「{turn_prompt}」")
-                print(f"  蓮蓬頭說  ：「{ans}」")
-                history.append({"role": "user", "parts": [{"text": full}]})
-                history.append({"role": "model", "parts": [{"text": ans}]})
-            length_result = check_length(ans, sc.get("allow_20", False))
-        else:
-            print(f"  輸入      ：「{sc['prompt'][:40]}{'...' if len(sc['prompt']) > 40 else ''}」")
-            print(f"  生成中...", end="", flush=True)
-            ans = ask(sc["prompt"])
-            print(f"\r  蓮蓬頭說  ：「{ans}」")
-            length_result = check_length(ans, sc.get("allow_20", False))
+        matched = None
+        s_hint  = None
+        prompt  = ""
 
-        # 字數檢查
-        if length_result == OK:
-            print(f"  字數      ：{OK}")
-        else:
-            print(f"  字數      ：{length_result}")
+        if sc["mode"] == "ambient":
+            rms, centroid, zcr, fhr, melody = sc["acoustic"]
+            matched = match_sound(rms, centroid, zcr, fhr, melody)
+            if matched:
+                print(f"  匹配記憶  ：{matched['id']}")
+            else:
+                print(f"  匹配記憶  ：（無匹配）")
+            ctx    = build_memory_context(matched)
+            sound_label = matched["id"] if matched else ("旋律性聲音" if melody else "環境音")
+            prompt = f"你現在感受到：{sound_label} 的聲音。"
 
-        # 彩蛋檢查
-        if sc.get("check_easter"):
-            is_egg = ans.strip() in EASTER_EGG_LINES
-            print(f"  彩蛋觸發  ：{'✓ 觸發！' if is_egg else '未觸發（機率性，正常）'}")
-            print(f"  提示      ：{sc.get('easter_hint', '')}")
+        elif sc["mode"] == "singing":
+            rms, centroid, zcr, fhr, melody = sc["acoustic"]
+            matched = match_sound(rms, centroid, zcr, fhr, melody)
+            if matched:
+                print(f"  匹配記憶  ：{matched['id']}")
+            sp     = sc["singing"]
+            sq     = score_singing(sp["hr"], sp["zcr"], sp["rms"])
+            # 手動注入前次分數來測試比較邏輯
+            if sp["prev"] is not None:
+                diff = sq - sp["prev"]
+                if diff > 0.08:
+                    s_hint = f"這次唱得比上次好（上次{sp['prev']:.2f}，這次{sq:.2f}）"
+                elif diff < -0.08:
+                    s_hint = f"這次唱得比上次差（上次{sp['prev']:.2f}，這次{sq:.2f}）"
+            print(f"  唱歌品質  ：{sq:.3f}  比較：{s_hint or '（無比較）'}")
+            ctx    = build_memory_context(matched, s_hint)
+            prompt = "你現在感受到：有人在唱歌。"
 
+        elif sc["mode"] == "dialogue":
+            ctx    = build_memory_context()
+            prompt = sc["text"]
+            print(f"  觀者說    ：「{prompt}」")
+
+        elif sc["mode"] == "monologue":
+            ctx    = build_memory_context()
+            prompt = "四周很安靜，好一陣子了。說一句自言自語。"
+            print(f"  觸發      ：靜默超過 30 秒")
+
+        print(f"  生成中...", end="", flush=True)
+        ans = ask(prompt, ctx)
+        print(f"\r  蓮蓬頭說  ：「{ans}」")
         print(f"  {OK}")
+
+        save_session_entry("自動測試", sc["title"], matched["id"] if matched else None, ans)
 
     except Exception as e:
         print(f"\r  {ERR} 錯誤：{e}")
@@ -253,12 +230,13 @@ for i, sc in enumerate(SCENARIOS):
 
     print()
 
+# ─── 結果摘要 ─────────────────────────────────────────────
 
-print("=" * 56)
+print("=" * 52)
 total = len(SCENARIOS)
 passed = total - errors
 if errors == 0:
     print(f"  {OK} 全部通過！{passed}/{total} 個場景正常。")
 else:
     print(f"  {ERR} {passed}/{total} 通過，{errors} 個失敗。")
-print("=" * 56)
+print("=" * 52)
