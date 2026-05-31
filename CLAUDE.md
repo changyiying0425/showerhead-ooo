@@ -779,14 +779,14 @@ MIC_DEVICE_INDEX=正確的數字
 - [x] 調整蓮蓬頭 SYSTEM_PROMPT 個性設定（移除水相關詞彙，純聽覺視角）
 - [x] 記憶系統建立（memory.py + memories.json，21 筆，目前未整合進 main.py）
 - [x] scan_sounds.py：自動掃描新音檔，互動式加入 memories.json
-- [x] test_response.py：自動化場景測試（8 情境）
+- [x] test_response.py：自動化場景測試（v2，17 情境，移除 memory.py 依賴）
 - [x] Voicemeeter 音效參數設定（EQ 完成，設定已儲存）
 - [x] 麥克風校準（2026-05-26 重新校準，VAD_SPEECH_THRESHOLD=0.100，AI降噪關閉）
 - [x] Arduino IDE 安裝 + U8g2 library（官網版 2.3.8，CH340 驅動 CH341SER.EXE）
 - [x] 燒錄 Arduino、測試 OLED 顯示 + FSR 壓力感測（2026-05-19 完成）
 - [x] **採購微動開關（Micro Switch）** — 掛架重置機制用
 - [x] **Arduino 新增微動開關接線 + 燒錄 HANG\n 訊號邏輯**（2026-05-22 測試通過）
-- [x] **蓮蓬頭 Skill 文件撰寫（9 個章節）** — 已整合進 main.py SYSTEM_PROMPT
+- [x] **蓮蓬頭 Skill 文件撰寫（10 個章節）** — 已整合進 main.py SYSTEM_PROMPT（含彩蛋語句庫）
 - [x] **升級 Gemini 為 multimodal 音訊輸入（環境音模式）** — `ask_gemini_audio()` 已實作
 - [x] **Python 加入每次對話的 instruction anchoring** — `ANCHOR_REMINDER` 已實作
 - [x] **Python 加入對話記憶（conversation_history）+ 收到 HANG\n 時清除**
@@ -805,6 +805,12 @@ MIC_DEVICE_INDEX=正確的數字
 - [x] **OLED2 刷新加速** — `oled2_loop` sleep 0.5s→0.15s→0.01s；實際限速由 BMAP_OK 流控決定，硬體上限約 6Hz（serial 89ms + SW I2C ~80ms）（2026-05-27）
 - [x] **OLED1 啟動污染修復** — 根因：SW I2C OLED2 初始化耗時 3–4s，Arduino `setup()` 未完成前 Python 已送 bitmap，UART buffer 溢位後殘留 bytes 被錯誤路由至 OLED1。修法：`time.sleep(2)→5`；`arduino_ready` event 確保 `oled2_loop` 等 Arduino 就緒後再啟動（2026-05-27）
 - [x] **音訊倒放效果（Reverse Audio）** — `REVERSE_AUDIO = True` 常數控制開關；在 ring modulation 之前執行 `samples[::-1]`，效果疊加為：倒放 → 環形調製 → Voicemeeter → 喇叭；OLED 文字顯示不受影響（2026-05-30）
+- [x] **Skill 全面優化（10章節完整版）** — 身份核心加入身體感知、動物感知升級、情境分支擴充、記憶觸發頻率明確化、語氣示範庫分類擴充至 70+ 句、彩蛋語句庫上線（康熙來了×6、甄嬛傳×2）
+- [x] **彩蛋系統完整實作** — `easter_egg_count` 計數器、HANG 時重置、上限1次、機率十分之一、`_is_easter_egg()` 雙向去標點比對
+- [x] **ANCHOR_REMINDER 擴充至7條** — 加入⑥彩蛋上限、⑦單句限制、彩蛋台詞不受字數限制
+- [x] **字數下限 3→2** — 允許「浴室」「有嗎」等極短回應，更符合蓮蓬頭個性
+- [x] **自言自語三輪分開 prompt** — 第1輪平靜疑惑、第2輪更不確定、第3輪最後一句
+- [x] **對話靜音逾時 prompt 更新** — BC混合語氣（感受手溫＋第一次碰到這種靜）
 - [ ] **採購展場佈線延長元件** — 4.7kΩ 電阻 × 2、USB A公對A母延長線（150cm+）、3.5mm 公對母延長線（150cm+）× 1、TRS 公對母延長線（150cm+）× 2
 - [ ] **焊接 OLED I2C 延長線 + 加裝上拉電阻** — SDA 與 3.3V 之間接 4.7kΩ、SCL 與 3.3V 之間接 4.7kΩ
 - [ ] **焊接所有元件延長線** — FSR 訊號線（A0）/ 電源線（3.3V/GND）/ 微動開關（D2）各延長 150cm
@@ -857,5 +863,6 @@ MIC_DEVICE_INDEX=正確的數字
 - **2026-05-30**：音訊倒放效果（Reverse Audio）— `REVERSE_AUDIO` 常數，倒放在 ring modulation 之前執行；新增 `test_reverse.py` 試聽工具
 
 - **2026-05-30**：彩蛋機率統一設為十分之一、上限改為1次；自言自語三輪改用各異 prompt；對話靜音逾時 prompt 更新（BC混合語氣）；`easter_egg_count` 計數器 + HANG 時重置
+- **2026-05-31**：Skill 全面優化（10章節）、彩蛋系統完整實作（`_is_easter_egg()` 雙向去標點）、ANCHOR 擴充至7條、字數下限 3→2、test_response.py 全面重寫（v2，17情境）
 
-*最後更新：2026-05-30（彩蛋機率/上限調整、自言自語分輪、對話靜音 prompt 更新）*
+*最後更新：2026-05-31（Skill 優化完整版、彩蛋系統、字數規則調整、測試工具重寫）*
