@@ -67,8 +67,8 @@ def ask(prompt: str, history: list = None) -> str:
 def check_length(text: str, allow_20: bool = False) -> str:
     limit = 20 if allow_20 else 16
     n = len(text.replace("？", "").replace("！", "").replace(" ", ""))
-    if n < 3:
-        return f"[警告] 字數 {n} < 3"
+    if n < 2:
+        return f"[警告] 字數 {n} < 2"
     if n > limit:
         return f"[警告] 字數 {n} > {limit}"
     return OK
