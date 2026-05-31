@@ -16,7 +16,17 @@ load_dotenv("key.env", override=True)
 
 from google import genai
 from google.genai import types
+import re
 from main import SYSTEM_PROMPT, ANCHOR_REMINDER, EASTER_EGG_LINES
+
+
+def _normalize(s: str) -> str:
+    return re.sub(r'[。，？！、…—\s]', '', s)
+
+
+def _is_easter_egg(text: str) -> bool:
+    n = _normalize(text)
+    return any(_normalize(egg) == n for egg in EASTER_EGG_LINES)
 
 OK  = "[OK]"
 ERR = "[X] "
@@ -192,10 +202,13 @@ for sc in SCENARIOS:
             print(f"\r  蓮蓬頭說  ：「{ans}」")
             length_result = check_length(ans, allow_20)
 
-        print(f"  字數      ：{length_result}")
+        is_egg = _is_easter_egg(ans)
+        if is_egg:
+            print(f"  字數      ：彩蛋台詞，不計字數")
+        else:
+            print(f"  字數      ：{length_result}")
 
         if sc.get("check_easter"):
-            is_egg = ans.strip().rstrip("。，？！") in EASTER_EGG_LINES
             print(f"  彩蛋      ：{'✓ 觸發！' if is_egg else '未觸發（機率性，正常）'}  {sc.get('easter_hint', '')}")
 
         print(f"  {OK}")

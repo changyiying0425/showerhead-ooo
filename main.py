@@ -683,6 +683,18 @@ def oled2_loop():
 #  Anti-repeat hint（傳給所有 Gemini 呼叫）
 # ═══════════════════════════════════════════════════
 
+def _normalize_text(s: str) -> str:
+    """去掉所有標點符號與空白，用於彩蛋偵測比對。"""
+    import re
+    return re.sub(r'[。，？！、…—\s]', '', s)
+
+
+def _is_easter_egg(text: str) -> bool:
+    """比對時雙向去標點，避免 Gemini 加句號導致偵測失敗。"""
+    normalized = _normalize_text(text)
+    return any(_normalize_text(egg) == normalized for egg in EASTER_EGG_LINES)
+
+
 def _anti_repeat_hint() -> str:
     """回傳最近說過的句子清單，要求 Gemini 這次必須說不同的話；彩蛋用盡時附加封鎖指令。"""
     parts = []
@@ -803,7 +815,7 @@ def respond(text: str):
         recent_responses.append(text)
         if len(recent_responses) > MAX_RECENT:
             recent_responses.pop(0)
-        if text.strip().rstrip("。，？！") in EASTER_EGG_LINES:
+        if _is_easter_egg(text):
             easter_egg_count += 1
             print(f"[彩蛋] 觸發 ({easter_egg_count}/1)：{text}")
         print(f"\n蓮蓬頭：{text}\n")
