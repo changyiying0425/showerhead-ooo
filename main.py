@@ -9,6 +9,8 @@ Object-Oriented Ontology 互動裝置
 """
 
 import os
+import re
+import random
 import sys
 import io
 import math
@@ -369,6 +371,9 @@ SYSTEM_PROMPT = """一、身份核心
 # 每次呼叫 Gemini 前附加的提醒句（instruction anchoring）
 ANCHOR_REMINDER = "（強制規則：①回應2–16字，超過就重新生成。例外：展覽／藝術問題、追問蓮蓬，允許最多20字；彩蛋台詞不受字數限制。②句尾不加句號。③英文只能回三句其中一句：「I'm fine, thank you. And you？」「My English is not very good.」「Thank you very much.」④不重複上一句的開頭詞。⑤上一句是問句，這句不再問。⑥第十章彩蛋語句整場最多1次，每條觸發條件大約十次裡出現一次。⑦每次只說一句話，不能把兩句合在一起輸出。）"
 
+# 音訊輸入時額外附加：避免模型把音訊當成「待轉錄／待描述」的素材而脫離角色
+AUDIO_FORMAT_GUARD = "（這不是轉錄任務：禁止輸出時間戳記（如「00:00」）、禁止用第三人稱描述音訊內容（如「背景音：...」「有人說話」「畫面中...」）。你不是在描述這段音訊，你是蓮蓬頭，你聽到了這個聲音，直接用第一人稱說出你的感知反應。）"
+
 # ═══════════════════════════════════════════════════
 #  初始化 API
 # ═══════════════════════════════════════════════════
@@ -695,15 +700,79 @@ def _is_easter_egg(text: str) -> bool:
     return any(_normalize_text(egg) == normalized for egg in EASTER_EGG_LINES)
 
 
+_RESPONSE_ANGLES = (
+    "這次用「身體感知」切入（你的身體、孔洞、握住你的手）",
+    "這次用「困惑或發問」切入，不要用陳述句",
+    "這次用「短句陳述」切入，盡量精簡，不要解釋",
+    "這次用「浴室記憶比較」切入（但不用「我記得」開頭）",
+    "這次用「聲音的物理特徵」切入（形狀、重量、邊緣、節奏），不談聲音的意義",
+    "這次用「天真的驚嘆」切入",
+    "這次用「找蓮蓬」的念頭切入",
+)
+
+
+def _water_recently_used() -> bool:
+    return any("水" in r for r in recent_responses[-3:])
+
+
+def _angle_hint() -> str:
+    """隨機指定一個切入角度，避免每次都收斂到同一種句型。"""
+    return f"（{random.choice(_RESPONSE_ANGLES)}。）"
+
+
 def _anti_repeat_hint() -> str:
     """回傳最近說過的句子清單，要求 Gemini 這次必須說不同的話；彩蛋用盡時附加封鎖指令。"""
     parts = []
     if recent_responses:
         items = "、".join(f"「{r}」" for r in recent_responses)
         parts.append(f"你最近說過這些句子：{items}。這次必須說一句完全不同的話——不同句型、不同開頭詞、不同內容，不能重複以上任何一句。")
+    if _water_recently_used():
+        parts.append("你最近用過水聲做比喻了，這次絕對不要再提到水、水聲或水的任何比喻。")
     if easter_egg_count >= 1:
         parts.append("彩蛋語句這場已說過一次，這次和之後都不能再說任何彩蛋語句。")
     return f"（{''.join(parts)}）" if parts else ""
+
+
+# ═══════════════════════════════════════════════════
+#  回應驗證與重新生成（防止格式跑掉、超字）
+# ═══════════════════════════════════════════════════
+
+_TIMESTAMP_RE = re.compile(r"\d{1,2}[:：]\d{2}")
+_TRANSCRIPTION_MARKERS = ("背景音", "轉錄", "字幕", "畫面", "音訊內容", "說話聲：", "旁白")
+
+
+def _violation_reason(text: str) -> str | None:
+    """檢查回應是否破壞角色設定或超字；彩蛋台詞不受此限制。回傳違規原因，無違規則回傳 None。"""
+    if not text or _is_easter_egg(text):
+        return None
+    if _TIMESTAMP_RE.search(text) or any(m in text for m in _TRANSCRIPTION_MARKERS):
+        return "格式跑掉了——輸出了時間戳記或第三人稱音訊描述（像「00:00」「背景音：」），不是用蓮蓬頭的第一人稱直接說話"
+    if len(text) > 20:
+        return f"太長了（{len(text)}字），請壓在16字以內，直接重新說一句不同的話"
+    return None
+
+
+def _regenerate_once(base_contents: list, config, bad_result: str, reason: str) -> str:
+    """違規時附加糾正訊息重打一次；新結果仍違規則保留原回應，避免無限延遲。"""
+    print(f"[驗證] 重新生成：{reason}（原句：{bad_result}）")
+    fix_contents = base_contents + [
+        {"role": "model", "parts": [{"text": bad_result}]},
+        {"role": "user", "parts": [{"text": f"（{reason}，不要解釋自己為什麼這樣說。）"}]},
+    ]
+    try:
+        resp = gemini.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=fix_contents,
+            config=config,
+        )
+        fixed = resp.text.strip()
+        if not _violation_reason(fixed):
+            print(f"[驗證] 重新生成成功：{fixed}")
+            return fixed
+        print(f"[驗證] 重新生成仍違規，保留原句：{fixed}")
+    except Exception as e:
+        print(f"[驗證] 重新生成失敗：{e}")
+    return bad_result
 
 
 # ═══════════════════════════════════════════════════
@@ -831,25 +900,31 @@ def ask_gemini(prompt: str, use_history: bool = False) -> str | None:
 
     user_text = f"{ANCHOR_REMINDER}{_anti_repeat_hint()}\n{prompt}"
 
+    user_turn = {"role": "user", "parts": [{"text": user_text}]}
+
     # 對話模式帶入歷史，環境音模式單次呼叫
     if use_history and conversation_history:
-        contents = conversation_history + [
-            {"role": "user", "parts": [{"text": user_text}]}
-        ]
+        contents = conversation_history + [user_turn]
     else:
-        contents = user_text
+        contents = [user_turn]
+
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
 
     for attempt in range(4):
         try:
             resp = gemini.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
+                config=config,
             )
             result = resp.text.strip()
+
+            reason = _violation_reason(result)
+            if reason:
+                result = _regenerate_once(contents, config, result, reason)
 
             if use_history:
                 conversation_history.append(
@@ -863,8 +938,8 @@ def ask_gemini(prompt: str, use_history: bool = False) -> str | None:
         except Exception as e:
             err = str(e)
             if "503" in err and attempt < 3:
-                print(f"[Gemini] gemini-2.5-flash 503，2 秒後重試（第 {attempt+1} 次）...")
-                time.sleep(2)
+                print(f"[Gemini] gemini-2.5-flash 503，1 秒後重試（第 {attempt+1} 次）...")
+                time.sleep(1)
             else:
                 print(f"[Gemini] gemini-2.5-flash 錯誤：{e}")
                 break
@@ -897,7 +972,7 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
 
     parts = [
         {"inline_data": {"mime_type": "audio/wav", "data": audio_b64}},
-        {"text": ANCHOR_REMINDER + _anti_repeat_hint()},
+        {"text": ANCHOR_REMINDER + AUDIO_FORMAT_GUARD + _anti_repeat_hint() + _angle_hint()},
     ]
 
     # DEBUG 模式：先問 Gemini 聽到了什麼
@@ -915,24 +990,32 @@ def ask_gemini_audio(audio: np.ndarray) -> str | None:
         except Exception as e:
             print(f"[Gemini 聽到] 辨識失敗：{e}")
 
+    base_contents = [{"role": "user", "parts": parts}]
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+
     for attempt in range(4):   # 503 時自動重試，最多 4 次
         try:
             resp = gemini.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=[{"role": "user", "parts": parts}],
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
+                contents=base_contents,
+                config=config,
             )
             result = resp.text.strip()
+
+            reason = _violation_reason(result)
+            if reason:
+                result = _regenerate_once(base_contents, config, result, reason)
+
             print(f"[Gemini 回覆] {result}")
             return result
         except Exception as e:
             err = str(e)
             if "503" in err and attempt < 3:
-                print(f"[Gemini Audio] gemini-2.5-flash 503，2 秒後重試（第 {attempt+1} 次）...")
-                time.sleep(2)
+                print(f"[Gemini Audio] gemini-2.5-flash 503，1 秒後重試（第 {attempt+1} 次）...")
+                time.sleep(1)
             else:
                 print(f"[Gemini Audio] gemini-2.5-flash 錯誤：{e}")
                 break
@@ -980,9 +1063,13 @@ def ask_gemini_audio_dialogue(audio: np.ndarray) -> str | None:
 
     # ── 回應 call（帶 system prompt + history）──
     melody_hint = "（重要：若音訊中有旋律感或唱歌，請以聲音特質回應，例如好不好聽、聲音高低，不要翻譯或引用歌詞內容。）"
-    current_parts = [{"text": ANCHOR_REMINDER + melody_hint + _anti_repeat_hint()}, audio_inline]
+    current_parts = [{"text": ANCHOR_REMINDER + AUDIO_FORMAT_GUARD + melody_hint + _anti_repeat_hint() + _angle_hint()}, audio_inline]
     contents = (conversation_history + [{"role": "user", "parts": current_parts}]
                 if conversation_history else [{"role": "user", "parts": current_parts}])
+    respond_config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_PROMPT,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
 
     def _respond():
         for attempt in range(4):
@@ -990,17 +1077,18 @@ def ask_gemini_audio_dialogue(audio: np.ndarray) -> str | None:
                 resp = gemini.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        thinking_config=types.ThinkingConfig(thinking_budget=0),
-                    ),
+                    config=respond_config,
                 )
-                return resp.text.strip()
+                text = resp.text.strip()
+                reason = _violation_reason(text)
+                if reason:
+                    text = _regenerate_once(contents, respond_config, text, reason)
+                return text
             except Exception as e:
                 err = str(e)
                 if "503" in err and attempt < 3:
-                    print(f"[VAD] gemini-2.5-flash 503，2 秒後重試（第 {attempt+1} 次）...")
-                    time.sleep(2)
+                    print(f"[VAD] gemini-2.5-flash 503，1 秒後重試（第 {attempt+1} 次）...")
+                    time.sleep(1)
                 else:
                     print(f"[VAD] gemini-2.5-flash 錯誤：{e}")
                     break
@@ -1383,6 +1471,7 @@ def _switch_dialogue():
     global mode
     if mode != "dialogue":
         mode = "dialogue"
+        oled2_state["mode"] = "dialogue"   # 立即通知 oled2_loop 換白底，不等 audio_loop
         print("[模式] → 對話")
         threading.Thread(target=send_to_oled, args=("聽著...",), daemon=True).start()
 
@@ -1391,6 +1480,7 @@ def _switch_ambient():
     global mode
     if mode != "ambient":
         mode = "ambient"
+        oled2_state["mode"] = "ambient"    # 立即通知 oled2_loop 換黑底，不等 audio_loop
         print("[模式] → 環境音")
 
 
